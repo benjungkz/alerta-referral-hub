@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { createPartner } from "../../../lib/partners";
 
 /**
  * POST /api/referrals
@@ -18,47 +19,41 @@ export async function POST(request: NextRequest) {
     const firstName = body.firstName?.trim();
     const lastName = body.lastName?.trim();
     const email = body.email?.trim().toLowerCase();
-    const referralId = body.referralId
-      ? body.referralId?.trim().toUpperCase()
-      : "Test";
+    const referralId = body.referralId?.trim().toUpperCase();
+    const phone = body.phone?.trim();
 
     if (!firstName || !lastName || !email || !referralId) {
+      console.error("Validation failed:", {
+        firstName,
+        lastName,
+        email,
+        referralId,
+      });
       return NextResponse.json(
         { error: "Missing required referral fields" },
         { status: 400 },
       );
     }
 
-    /**
-     * ============================================
-     * TODO: Save referral applicant to DB
-     * ============================================
-     *
-     * Suggested schema:
-     * {
-     *   firstName: string,
-     *   lastName: string,
-     *   email: string,
-     *   referralId: string,
-     *   source: "google_form",
-     *   createdAt: Date
-     * }
-     *
-     * Example:
-     * await saveReferralApplicant({
-     *   firstName,
-     *   lastName,
-     *   email,
-     *   referralId,
-     *   source: "google_form",
-     *   createdAt: new Date(),
-     * });
-     */
+    // Call createPartner function to save referral applicant to DB
+    await createPartner({
+      partner_id: referralId,
+      partner_first_name: firstName,
+      partner_last_name: lastName,
+      contact_email: email,
+      contact_phone: phone,
+      organization_name: body.organization?.trim(),
+      contact_name: `${firstName} ${lastName}`,
+      segment_code: body.segmentCode,
+      reporting_group: body.reportingGroup,
+      status: "pending",
+      notes: "Created from referral webhook",
+    });
 
     return NextResponse.json({
       success: true,
-      message: "Referral applicant received",
-      referralId,
+      message: "Referral applicant saved successfully",
+      partner_id: referralId,
       firstName,
       lastName,
       email,
