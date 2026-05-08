@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createPartner } from "../../../lib/partners";
+import { createPartnerWithReferralLink } from "../../../lib/partners";
 
 /**
  * POST /api/referrals
@@ -35,24 +35,29 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Call createPartner function to save referral applicant to DB
-    await createPartner({
-      partner_id: referralId,
-      partner_first_name: firstName,
-      partner_last_name: lastName,
-      contact_email: email,
-      contact_phone: phone,
-      organization_name: body.organization?.trim(),
-      contact_name: `${firstName} ${lastName}`,
-      segment_code: body.segmentCode,
-      reporting_group: body.reportingGroup,
-      status: "pending",
-      notes: "Created from referral webhook",
-    });
+    // Create partner and referral link in a single DynamoDB transaction.
+    await createPartnerWithReferralLink(
+      {
+        partner_id: referralId,
+        partner_first_name: firstName,
+        partner_last_name: lastName,
+        contact_email: email,
+        contact_phone: phone,
+        organization_name: body.organization?.trim(),
+        contact_name: `${firstName} ${lastName}`,
+        segment_code: body.segmentCode,
+        reporting_group: body.reportingGroup,
+        status: "pending",
+        notes: "Created from referral webhook",
+      },
+      {
+        partner_id: referralId,
+      },
+    );
 
     return NextResponse.json({
       success: true,
-      message: "Referral applicant saved successfully",
+      message: "Referral applicant (Partner, Referral Link) saved successfully",
       partner_id: referralId,
       firstName,
       lastName,

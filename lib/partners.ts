@@ -1,13 +1,15 @@
+import { randomUUID } from "crypto";
 import {
   PutCommand,
   GetCommand,
   UpdateCommand,
   DeleteCommand,
   ScanCommand,
+  TransactWriteCommand,
 } from "@aws-sdk/lib-dynamodb";
 import { ddbDocClient } from "./dynamodb";
 import { logger } from "./logger";
-import { Partner } from "../types/db";
+import { Partner, ReferralLink } from "../types/db";
 
 const TABLE_NAME = process.env.DYNAMODB_PARTNERS_TABLE || "partners";
 
@@ -157,6 +159,112 @@ export async function createPartner(partnerData: Partial<Partner> = {}) {
   );
 
   return partner;
+}
+
+export async function createPartnerWithReferralLink(
+  partnerData: Partial<Partner> = {},
+  referralLinkData: Partial<ReferralLink> = {},
+) {
+  if (!partnerData.partner_id) {
+    throw new Error(
+      "partner_id is required for transactional partner creation.",
+    );
+  }
+
+  if (!partnerData.partner_first_name) {
+    throw new Error(
+      "partner_first_name is required for transactional partner creation.",
+    );
+  }
+
+  if (!partnerData.partner_last_name) {
+    throw new Error(
+      "partner_last_name is required for transactional partner creation.",
+    );
+  }
+
+  if (!partnerData.contact_email) {
+    throw new Error(
+      "contact_email is required for transactional partner creation.",
+    );
+  }
+
+  if (!partnerData.contact_phone || partnerData.contact_phone.trim() === "") {
+    throw new Error(
+      "contact_phone is required for transactional partner creation.",
+    );
+  }
+
+  const now = new Date().toISOString();
+
+  const partner: Partner = {
+    partner_id: partnerData.partner_id!,
+    partner_first_name: partnerData.partner_first_name!,
+    partner_last_name: partnerData.partner_last_name!,
+    organization_name: partnerData.organization_name,
+    contact_name:
+      partnerData.contact_name ||
+      `${partnerData.partner_first_name!} ${partnerData.partner_last_name!}`,
+    contact_email: partnerData.contact_email!,
+    contact_phone: partnerData.contact_phone!,
+    segment_code: partnerData.segment_code || "share-awareness",
+    reporting_group: partnerData.reporting_group || "marketing",
+    status: partnerData.status || "pending",
+    notes: partnerData.notes || "",
+    created_at: now,
+    updated_at: now,
+  };
+
+  const referralLink: ReferralLink = {
+    referral_link_id: referralLinkData.referral_link_id || randomUUID(),
+    partner_id: partner.partner_id,
+    link_name:
+      referralLinkData.link_name ||
+      `${partner.partner_first_name} ${partner.partner_last_name}`,
+    base_path: referralLinkData.base_path || `/${partner.partner_id}`,
+    full_url:
+      referralLinkData.full_url ||
+      `${process.env.BASE_URL || "https://go.alertahome.com"}/${partner.partner_id}`,
+    segment_code: referralLinkData.segment_code || partner.segment_code,
+    utm: referralLinkData.utm || {
+      source: "referral",
+      medium: "qr",
+      campaign: referralLinkData.segment_code || partner.segment_code,
+      content: "rack_card",
+      term: "family_caregiver",
+    },
+    is_active:
+      referralLinkData.is_active !== undefined
+        ? referralLinkData.is_active
+        : true,
+    notes: referralLinkData.notes || "",
+    created_at: now,
+    updated_at: now,
+  };
+
+  await ddbDocClient.send(
+    new TransactWriteCommand({
+      TransactItems: [
+        {
+          Put: {
+            TableName: TABLE_NAME,
+            Item: partner,
+            ConditionExpression: "attribute_not_exists(partner_id)",
+          },
+        },
+        {
+          Put: {
+            TableName:
+              process.env.DYNAMODB_REFERRAL_LINKS_TABLE || "referral_links",
+            Item: referralLink,
+            ConditionExpression: "attribute_not_exists(referral_link_id)",
+          },
+        },
+      ],
+    }),
+  );
+
+  return { partner, referralLink };
 }
 
 export async function getPartner(partnerId = "JUNG-A9K3") {
