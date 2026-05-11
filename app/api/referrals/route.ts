@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { createPartnerWithReferralLink } from "../../../lib/partners";
 
 /**
  * POST /api/referrals
@@ -15,53 +16,61 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
 
-    const firstName = body.firstName?.trim();
-    const lastName = body.lastName?.trim();
+    const firstName = body.first_name?.trim();
+    const lastName = body.last_name?.trim();
     const email = body.email?.trim().toLowerCase();
-    const referralId = body.referralId
-      ? body.referralId?.trim().toUpperCase()
-      : "Test";
+    const referralId = body.referral_id?.trim();
+    const phone = body.phone?.trim();
+    const status = body.status?.trim().toLowerCase() || "pending";
+    const segment = body.segment?.trim();
+    const reportingGroup = body.reporting_group?.trim();
+    const notes = body.notes?.trim() || "";
+    const consent = body.consent?.trim();
+    const createdAt = body.created_at?.trim();
 
-    if (!firstName || !lastName || !email || !referralId) {
+    if (
+      !firstName ||
+      !lastName ||
+      !email ||
+      !referralId ||
+      !phone ||
+      !consent
+    ) {
+      console.error("Validation failed:", {
+        referralId,
+      });
       return NextResponse.json(
         { error: "Missing required referral fields" },
         { status: 400 },
       );
     }
 
-    /**
-     * ============================================
-     * TODO: Save referral applicant to DB
-     * ============================================
-     *
-     * Suggested schema:
-     * {
-     *   firstName: string,
-     *   lastName: string,
-     *   email: string,
-     *   referralId: string,
-     *   source: "google_form",
-     *   createdAt: Date
-     * }
-     *
-     * Example:
-     * await saveReferralApplicant({
-     *   firstName,
-     *   lastName,
-     *   email,
-     *   referralId,
-     *   source: "google_form",
-     *   createdAt: new Date(),
-     * });
-     */
+    // Create partner and referral link in a single DynamoDB transaction.
+    await createPartnerWithReferralLink(
+      {
+        partner_id: referralId,
+        partner_first_name: firstName,
+        partner_last_name: lastName,
+        contact_email: email,
+        contact_phone: phone,
+        organization_name: body.organization?.trim(),
+        contact_name: `${firstName} ${lastName}`,
+        segment_code: segment,
+        reporting_group: reportingGroup,
+        status: status,
+        notes: notes,
+        consent: consent,
+        created_at: createdAt,
+      },
+      {
+        partner_id: referralId,
+      },
+    );
 
     return NextResponse.json({
       success: true,
-      message: "Referral applicant received",
-      referralId,
-      firstName,
-      lastName,
-      email,
+      message: "Referral applicant (Partner, Referral Link) saved successfully",
+      partner_id: referralId,
     });
   } catch (error) {
     console.error("Referral webhook error:", error);
