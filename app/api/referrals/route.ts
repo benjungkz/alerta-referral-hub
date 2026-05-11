@@ -16,17 +16,27 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
 
-    const firstName = body.firstName?.trim();
-    const lastName = body.lastName?.trim();
+    const firstName = body.first_name?.trim();
+    const lastName = body.last_name?.trim();
     const email = body.email?.trim().toLowerCase();
-    const referralId = body.referralId?.trim().toUpperCase();
+    const referralId = body.referral_id?.trim();
     const phone = body.phone?.trim();
+    const status = body.status?.trim().toLowerCase() || "pending";
+    const segment = body.segment?.trim();
+    const reportingGroup = body.reporting_group?.trim();
+    const notes = body.notes?.trim() || "";
+    const consent = body.consent?.trim();
+    const createdAt = body.created_at?.trim();
 
-    if (!firstName || !lastName || !email || !referralId) {
+    if (
+      !firstName ||
+      !lastName ||
+      !email ||
+      !referralId ||
+      !phone ||
+      !consent
+    ) {
       console.error("Validation failed:", {
-        firstName,
-        lastName,
-        email,
         referralId,
       });
       return NextResponse.json(
@@ -45,10 +55,12 @@ export async function POST(request: NextRequest) {
         contact_phone: phone,
         organization_name: body.organization?.trim(),
         contact_name: `${firstName} ${lastName}`,
-        segment_code: body.segmentCode,
-        reporting_group: body.reportingGroup,
-        status: "pending",
-        notes: "Created from referral webhook",
+        segment_code: segment,
+        reporting_group: reportingGroup,
+        status: status,
+        notes: notes,
+        consent: consent,
+        created_at: createdAt,
       },
       {
         partner_id: referralId,
@@ -59,9 +71,6 @@ export async function POST(request: NextRequest) {
       success: true,
       message: "Referral applicant (Partner, Referral Link) saved successfully",
       partner_id: referralId,
-      firstName,
-      lastName,
-      email,
     });
   } catch (error) {
     console.error("Referral webhook error:", error);

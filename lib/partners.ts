@@ -146,6 +146,7 @@ export async function createPartner(partnerData: Partial<Partner> = {}) {
     reporting_group: partnerData.reporting_group || "marketing",
     status: partnerData.status || "pending",
     notes: partnerData.notes || "",
+    consent: partnerData.consent!,
     created_at: now,
     updated_at: now,
   };
@@ -165,6 +166,7 @@ export async function createPartnerWithReferralLink(
   partnerData: Partial<Partner> = {},
   referralLinkData: Partial<ReferralLink> = {},
 ) {
+  // Validation not null checks for required fields for both partner and referral link creation in a single transaction
   if (!partnerData.partner_id) {
     throw new Error(
       "partner_id is required for transactional partner creation.",
@@ -195,13 +197,24 @@ export async function createPartnerWithReferralLink(
     );
   }
 
+  if (!partnerData.consent) {
+    throw new Error("consent is required for transactional partner creation.");
+  }
+
+  if (!referralLinkData.partner_id) {
+    throw new Error(
+      "partner_id is required for transactional referral link creation.",
+    );
+  }
+
+  // payload preparation for both partner and referral link with defaults for missing optional fields
   const now = new Date().toISOString();
 
   const partner: Partner = {
     partner_id: partnerData.partner_id!,
     partner_first_name: partnerData.partner_first_name!,
     partner_last_name: partnerData.partner_last_name!,
-    organization_name: partnerData.organization_name,
+    organization_name: partnerData.organization_name || "",
     contact_name:
       partnerData.contact_name ||
       `${partnerData.partner_first_name!} ${partnerData.partner_last_name!}`,
@@ -210,8 +223,9 @@ export async function createPartnerWithReferralLink(
     segment_code: partnerData.segment_code || "share-awareness",
     reporting_group: partnerData.reporting_group || "marketing",
     status: partnerData.status || "pending",
+    consent: partnerData.consent!,
     notes: partnerData.notes || "",
-    created_at: now,
+    created_at: partnerData.created_at!,
     updated_at: now,
   };
 
@@ -224,7 +238,7 @@ export async function createPartnerWithReferralLink(
     base_path: referralLinkData.base_path || `/${partner.partner_id}`,
     full_url:
       referralLinkData.full_url ||
-      `${process.env.BASE_URL || "https://go.alertahome.com"}/${partner.partner_id}`,
+      `${process.env.BASE_URL || "https://go.alertahome.com/"}${partner.partner_id}`,
     segment_code: referralLinkData.segment_code || partner.segment_code,
     utm: referralLinkData.utm || {
       source: "referral",
@@ -237,11 +251,15 @@ export async function createPartnerWithReferralLink(
       referralLinkData.is_active !== undefined
         ? referralLinkData.is_active
         : true,
-    notes: referralLinkData.notes || "",
+    notes: referralLinkData.notes || partner.notes || "",
     created_at: now,
     updated_at: now,
   };
+  // test console logs to verify data before transaction
+  console.log("Prepared Partner Data for Transaction:", partner);
+  console.log("Prepared Referral Link Data for Transaction:", referralLink);
 
+  // DB transaction to create both partner and referral link atomically
   await ddbDocClient.send(
     new TransactWriteCommand({
       TransactItems: [

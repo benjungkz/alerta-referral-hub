@@ -71,6 +71,8 @@ export interface Partner {
 
   status: PartnerStatus;
 
+  consent: "Yes" | "No";
+
   notes?: string;
 
   created_at: string;
