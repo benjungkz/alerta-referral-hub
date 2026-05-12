@@ -123,6 +123,7 @@ export interface ReferralLink {
   full_url: string;
 
   qr_code_asset_url?: string;
+  rack_card_url?: string;
 
   segment_code: SegmentCode;
 

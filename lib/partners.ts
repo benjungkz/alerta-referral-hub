@@ -10,6 +10,8 @@ import {
 import { ddbDocClient } from "./dynamodb";
 import { logger } from "./logger";
 import { Partner, ReferralLink } from "../types/db";
+const REFERRAL_LINKS_TABLE_NAME =
+  process.env.DYNAMODB_REFERRAL_LINKS_TABLE || "referral_links";
 
 const TABLE_NAME = process.env.DYNAMODB_PARTNERS_TABLE || "partners";
 
@@ -298,9 +300,11 @@ export async function getPartner(partnerId = "JUNG-A9K3") {
   return result.Item;
 }
 
-export async function updatePartnerStatus(partnerId = "JUNG-A9K3") {
-  const now = new Date().toISOString();
-
+export async function updatePartnerStatus(
+  partnerId = "JUNG-A9K3",
+  status: string = "active",
+  updatedAt: string = new Date().toISOString(),
+) {
   const result = await ddbDocClient.send(
     new UpdateCommand({
       TableName: TABLE_NAME,
@@ -312,8 +316,8 @@ export async function updatePartnerStatus(partnerId = "JUNG-A9K3") {
         "#status": "status",
       },
       ExpressionAttributeValues: {
-        ":status": "active",
-        ":updated_at": now,
+        ":status": status,
+        ":updated_at": updatedAt,
       },
       ReturnValues: "ALL_NEW",
     }),
@@ -333,4 +337,68 @@ export async function deletePartner(partnerId = "JUNG-A9K3") {
   );
 
   return { partner_id: partnerId, deleted: true };
+}
+
+export async function updateReferralResourcesAtomic(
+  partnerId: string,
+  status: string,
+  qrCodeAssetUrl: string,
+  rackCardUrl: string,
+  updatedAt: string = new Date().toISOString(),
+) {
+  // 1. Find all referral links for this partner
+  const referralLinksResult = await ddbDocClient.send(
+    new ScanCommand({
+      TableName: REFERRAL_LINKS_TABLE_NAME,
+      FilterExpression: "partner_id = :partner_id",
+      ExpressionAttributeValues: {
+        ":partner_id": partnerId,
+      },
+      ProjectionExpression: "referral_link_id",
+    }),
+  );
+
+  const referralLinkIds = (referralLinksResult.Items || []).map(
+    (item) => item.referral_link_id as string,
+  );
+
+  if (referralLinkIds.length === 0) {
+    throw new Error(`No referral link found for partner_id=${partnerId}`);
+  }
+
+  // 2. Build TransactWrite items: update partner + all referral links atomically
+  const transactItems = [
+    {
+      Update: {
+        TableName: TABLE_NAME,
+        Key: { partner_id: partnerId },
+        UpdateExpression: "SET #status = :status, updated_at = :updated_at",
+        ExpressionAttributeNames: { "#status": "status" },
+        ExpressionAttributeValues: {
+          ":status": status,
+          ":updated_at": updatedAt,
+        },
+      },
+    },
+    ...referralLinkIds.map((referralLinkId) => ({
+      Update: {
+        TableName: REFERRAL_LINKS_TABLE_NAME,
+        Key: { referral_link_id: referralLinkId },
+        UpdateExpression:
+          "SET qr_code_asset_url = :qr_code_asset_url, rack_card_url = :rack_card_url, updated_at = :updated_at",
+        ExpressionAttributeValues: {
+          ":qr_code_asset_url": qrCodeAssetUrl,
+          ":rack_card_url": rackCardUrl,
+          ":updated_at": updatedAt,
+        },
+      },
+    })),
+  ];
+
+  // 3. Execute atomic transaction
+  const result = await ddbDocClient.send(
+    new TransactWriteCommand({ TransactItems: transactItems }),
+  );
+
+  return result;
 }
