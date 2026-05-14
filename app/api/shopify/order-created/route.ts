@@ -1,5 +1,4 @@
 import crypto from "crypto";
-import { randomUUID } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { PutCommand, QueryCommand } from "@aws-sdk/lib-dynamodb";
 import { addTagsToOrder } from "@/lib/ShopifyOrder";
@@ -17,6 +16,8 @@ const REFERRAL_LINKS_TABLE =
   process.env.DYNAMODB_REFERRAL_LINKS_TABLE || "referral_links";
 const REFERRAL_LINKS_PARTNER_ID_INDEX =
   process.env.DYNAMODB_REFERRAL_LINKS_PARTNER_ID_INDEX || "partner_id-GSI";
+const CONVERSION_ID_BYTES = 12;
+
 type ShopifyNoteAttribute = {
   name: string;
   value: string;
@@ -120,6 +121,18 @@ function removeUndefinedValues<T>(value: T): T {
   return value;
 }
 
+function buildOrderTag(prefix: string, value: string) {
+  const maxOrderTagLength = 40;
+  const tagPrefix = `${prefix}:`;
+  const availableValueLength = maxOrderTagLength - tagPrefix.length;
+
+  return `${tagPrefix}${value.slice(0, availableValueLength)}`;
+}
+
+function createConversionId() {
+  return crypto.randomBytes(CONVERSION_ID_BYTES).toString("hex");
+}
+
 async function getReferralLink(referralId: string) {
   const result = await ddbDocClient.send(
     new QueryCommand({
@@ -216,6 +229,7 @@ export async function POST(request: NextRequest) {
     .toUpperCase();
 
   if (!referralId) {
+    console.log("No referral ID found in order note attributes");
     return NextResponse.json({
       success: true,
       message: "No referral found",
@@ -223,7 +237,7 @@ export async function POST(request: NextRequest) {
   }
 
   // create a unique conversion ID for this order - this will be used to link the Shopify order with the referral conversion in our database and ensure idempotency in case of duplicate webhooks
-  const conversionId = randomUUID();
+  const conversionId = createConversionId();
 
   // Save conversion data to DynamoDB for tracking and analytics purposes
   try {
@@ -251,11 +265,17 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  console.log(
+    "Saved referral conversion for order ID:",
+    order.id,
+    "with conversion ID:",
+    conversionId,
+  );
   // Add tags to the Shopify order for easy identification and segmentation in Shopify admin and analytics - this will allow us to easily track which orders came from referrals and link them back to the conversion data in our database
   try {
     await addTagsToOrder(orderGid, [
-      `referrer:${referralId}`,
-      `conversion:${conversionId}`,
+      buildOrderTag("ref", referralId),
+      buildOrderTag("conversion", conversionId),
       "referral-order",
     ]);
   } catch (error) {
