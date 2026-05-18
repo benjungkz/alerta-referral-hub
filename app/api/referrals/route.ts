@@ -4,6 +4,7 @@ import {
   createPartnerWithReferralLink,
   updateReferralResourcesAtomic,
 } from "../../../lib/partners";
+import { sendReferralNotificationEmail } from "@/lib/sendReferralNotificationEmail";
 
 /**
  * POST /api/referrals
@@ -108,14 +109,15 @@ export async function POST(request: NextRequest) {
     );
 
     // Send notification email to referral applicant with their referral resources.
-    // await sendReferralNotificationEmail({
-    //   toEmail: email,
-    //   partnerName: contactName || organizationName,
-    //   referralId,
-    //   referralUrl,
-    //   qrCodeUrl,
-    //   rackCardUrl,
-    // });
+    await sendReferralNotificationEmail({
+      toEmail: email,
+      partnerName: firstName,
+      locationName: organizationName,
+      referralId,
+      referralUrl,
+      qrCodeUrl,
+      rackCardUrl,
+    });
 
     return NextResponse.json({
       success: true,

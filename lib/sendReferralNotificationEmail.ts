@@ -1,9 +1,9 @@
-import { SESClient, SendRawEmailCommand } from "@aws-sdk/client-ses";
-import { randomUUID } from "crypto";
+import { SendEmailCommand, SESClient } from "@aws-sdk/client-ses";
 
 type SendReferralNotificationEmailParams = {
   toEmail: string;
   partnerName: string;
+  locationName: string;
   referralId: string;
   referralUrl: string;
   qrCodeUrl: string;
@@ -13,14 +13,6 @@ type SendReferralNotificationEmailParams = {
 const region = process.env.AWS_REGION || "us-east-2";
 const sesClient = new SESClient({ region });
 
-function chunkBase64(value: string) {
-  return value.match(/.{1,76}/g)?.join("\r\n") || "";
-}
-
-function sanitizeFilenamePart(value: string) {
-  return value.replace(/[^a-zA-Z0-9-_]/g, "-");
-}
-
 function escapeHtml(value: string) {
   return value
     .replace(/&/g, "&amp;")
@@ -29,34 +21,10 @@ function escapeHtml(value: string) {
     .replace(/"/g, "&quot;");
 }
 
-async function fetchAttachment(url: string) {
-  const response = await fetch(url);
-
-  if (!response.ok) {
-    throw new Error(`Failed to download rack card image: ${response.status}`);
-  }
-
-  const contentType = response.headers.get("content-type") || "image/png";
-  const buffer = Buffer.from(await response.arrayBuffer());
-
-  return { contentType, buffer };
-}
-
-function getAttachmentExtension(contentType: string) {
-  if (contentType.includes("pdf")) {
-    return "pdf";
-  }
-
-  if (contentType.includes("jpeg") || contentType.includes("jpg")) {
-    return "jpg";
-  }
-
-  return "png";
-}
-
 export async function sendReferralNotificationEmail({
   toEmail,
   partnerName,
+  locationName,
   referralId,
   referralUrl,
   qrCodeUrl,
@@ -69,74 +37,72 @@ export async function sendReferralNotificationEmail({
     throw new Error("Missing SES_FROM_EMAIL environment variable.");
   }
 
-  const { contentType, buffer } = await fetchAttachment(rackCardUrl);
-  const boundary = `Boundary-${randomUUID()}`;
-  const attachmentName = `rack-card-${sanitizeFilenamePart(
-    referralId,
-  )}.${getAttachmentExtension(contentType)}`;
   const escapedPartnerName = escapeHtml(partnerName);
+  const escapedLocationName = escapeHtml(locationName);
+  const escapedReferralId = escapeHtml(referralId);
   const escapedReferralUrl = escapeHtml(referralUrl);
   const escapedQrCodeUrl = escapeHtml(qrCodeUrl);
+  const escapedRackCardUrl = escapeHtml(rackCardUrl);
 
   const textBody = [
     `Hi ${partnerName},`,
     "",
-    "Your Alerta referral resources are ready.",
+    `Welcome to the Alerta Home Referral Program for ${locationName}!`,
     "",
+    "Your referral resources are now ready. You can use the referral link and rack card below to share Alerta Home with families, caregivers, and care professionals who may benefit from our support.",
+    "",
+    `Facility / Organization Name: ${locationName}`,
+    `Referral ID: ${referralId}`,
     `Referral URL: ${referralUrl}`,
-    `QR code URL: ${qrCodeUrl}`,
+    `QR Code Download: ${qrCodeUrl}`,
+    `Rack Card PDF Download: ${rackCardUrl}`,
     "",
-    "The rack card image is attached to this email.",
+    "If you have any questions, please feel free to contact us anytime at care@alertahome.com.",
+    "",
+    "Thank you again for joining the Alerta Home Referral Program. We truly appreciate your support.",
+    "",
+    "Best regards,",
+    "The Alerta Home Team",
   ].join("\n");
 
   const htmlBody = [
     `<p>Hi ${escapedPartnerName},</p>`,
-    "<p>Your Alerta referral resources are ready.</p>",
-    `<p><strong>Referral URL:</strong> <a href="${escapedReferralUrl}">${escapedReferralUrl}</a></p>`,
-    `<p><strong>QR code URL:</strong> <a href="${escapedQrCodeUrl}">${escapedQrCodeUrl}</a></p>`,
-    "<p>The rack card image is attached to this email.</p>",
+    `<p>Welcome to the <strong>Alerta Home Referral Program</strong> for <strong>${escapedLocationName}</strong>!</p>`,
+    "<p>Your referral resources are now ready. You can use the referral link and rack card below to share Alerta Home with families, caregivers, and care professionals who may benefit from our support.</p>",
+    "<ul>",
+    `<li><strong>Facility / Organization Name:</strong> ${escapedLocationName}</li>`,
+    `<li><strong>Referral ID:</strong> ${escapedReferralId}</li>`,
+    `<li><strong>Referral URL:</strong> <a href="${escapedReferralUrl}">${escapedReferralUrl}</a></li>`,
+    `<li>📥 <strong>QR Code:</strong> <a href="${escapedQrCodeUrl}">Download</a></li>`,
+    `<li>📄 <strong>Rack Card PDF:</strong> <a href="${escapedRackCardUrl}">Download</a></li>`,
+    "</ul>",
+    `<p>If you have any questions, please feel free to contact us anytime at <a href="mailto:care@alertahome.com">care@alertahome.com</a>.</p>`,
+    "<p>Thank you again for joining the Alerta Home Referral Program. We truly appreciate your support.</p>",
+    "<p>Best regards,<br>The Alerta Home Team</p>",
   ].join("");
 
-  const rawMessage = [
-    `From: ${fromEmail}`,
-    `To: ${toEmail}`,
-    `Subject: Your Alerta referral rack card is ready`,
-    "MIME-Version: 1.0",
-    `Content-Type: multipart/mixed; boundary="${boundary}"`,
-    "",
-    `--${boundary}`,
-    'Content-Type: multipart/alternative; boundary="Alternative"',
-    "",
-    "--Alternative",
-    'Content-Type: text/plain; charset="UTF-8"',
-    "Content-Transfer-Encoding: base64",
-    "",
-    chunkBase64(Buffer.from(textBody, "utf8").toString("base64")),
-    "",
-    "--Alternative",
-    'Content-Type: text/html; charset="UTF-8"',
-    "Content-Transfer-Encoding: base64",
-    "",
-    chunkBase64(Buffer.from(htmlBody, "utf8").toString("base64")),
-    "",
-    "--Alternative--",
-    "",
-    `--${boundary}`,
-    `Content-Type: ${contentType}; name="${attachmentName}"`,
-    `Content-Disposition: attachment; filename="${attachmentName}"`,
-    "Content-Transfer-Encoding: base64",
-    "",
-    chunkBase64(buffer.toString("base64")),
-    "",
-    `--${boundary}--`,
-    "",
-  ].join("\r\n");
-
   await sesClient.send(
-    new SendRawEmailCommand({
-      RawMessage: {
-        Data: Buffer.from(rawMessage),
+    new SendEmailCommand({
+      Destination: {
+        ToAddresses: [toEmail],
       },
+      Message: {
+        Subject: {
+          Charset: "UTF-8",
+          Data: "Your Alerta referral resources are ready",
+        },
+        Body: {
+          Text: {
+            Charset: "UTF-8",
+            Data: textBody,
+          },
+          Html: {
+            Charset: "UTF-8",
+            Data: htmlBody,
+          },
+        },
+      },
+      Source: fromEmail,
     }),
   );
 }
