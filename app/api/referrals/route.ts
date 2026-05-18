@@ -125,7 +125,7 @@ export async function POST(request: NextRequest) {
         "Referral applicant and referral PDF resources saved successfully",
       partner_id: referralId,
       qr_code_url: qrCodeUrl,
-      rack_card_pdf_url: rackCardUrl,
+      rack_card_url: rackCardUrl,
     });
   } catch (error) {
     console.error("Referral webhook error:", error);

@@ -47,7 +47,7 @@ export async function sendReferralNotificationEmail({
   const textBody = [
     `Hi ${partnerName},`,
     "",
-    `Welcome to the Alerta Home Referral Program for ${locationName}!`,
+    `We’re excited to welcome ${locationName} to the Alerta Home Referral Program!`,
     "",
     "Your referral resources are now ready. You can use the referral link and rack card below to share Alerta Home with families, caregivers, and care professionals who may benefit from our support.",
     "",
@@ -67,10 +67,9 @@ export async function sendReferralNotificationEmail({
 
   const htmlBody = [
     `<p>Hi ${escapedPartnerName},</p>`,
-    `<p>Welcome to the <strong>Alerta Home Referral Program</strong> for <strong>${escapedLocationName}</strong>!</p>`,
+    `<p>We’re excited to welcome <strong>${escapedLocationName}</strong> to the Alerta Home Referral Program!</p>`,
     "<p>Your referral resources are now ready. You can use the referral link and rack card below to share Alerta Home with families, caregivers, and care professionals who may benefit from our support.</p>",
     "<ul>",
-    `<li><strong>Facility / Organization Name:</strong> ${escapedLocationName}</li>`,
     `<li><strong>Referral ID:</strong> ${escapedReferralId}</li>`,
     `<li><strong>Referral URL:</strong> <a href="${escapedReferralUrl}">${escapedReferralUrl}</a></li>`,
     `<li>📥 <strong>QR Code:</strong> <a href="${escapedQrCodeUrl}">Download</a></li>`,
@@ -89,7 +88,7 @@ export async function sendReferralNotificationEmail({
       Message: {
         Subject: {
           Charset: "UTF-8",
-          Data: "Your Alerta referral resources are ready",
+          Data: "Your Alerta Home Referral Resources Are Ready",
         },
         Body: {
           Text: {
