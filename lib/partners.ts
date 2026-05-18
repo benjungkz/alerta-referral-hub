@@ -394,10 +394,13 @@ export async function updateReferralResourcesAtomic(
       Update: {
         TableName: TABLE_NAME,
         Key: { partner_id: partnerId },
-        UpdateExpression: "SET #status = :status, updated_at = :updated_at",
+        UpdateExpression:
+          "SET #status = :status, qr_code_asset_url = :qr_code_asset_url, rack_card_url = :rack_card_url, updated_at = :updated_at",
         ExpressionAttributeNames: { "#status": "status" },
         ExpressionAttributeValues: {
           ":status": status,
+          ":qr_code_asset_url": qrCodeAssetUrl,
+          ":rack_card_url": rackCardUrl,
           ":updated_at": updatedAt,
         },
       },

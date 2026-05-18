@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createPartnerWithReferralLink } from "../../../lib/partners";
+import { createRackCardWithPlacid } from "@/lib/createRackCard";
+import {
+  createPartnerWithReferralLink,
+  updateReferralResourcesAtomic,
+} from "../../../lib/partners";
 
 /**
  * POST /api/referrals
@@ -28,6 +32,7 @@ export async function POST(request: NextRequest) {
     const notes = body.notes?.trim() || "";
     const consent = body.consent?.trim();
     const createdAt = body.created_at?.trim();
+    const contactName = `${firstName} ${lastName}`;
 
     if (
       !firstName ||
@@ -47,7 +52,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Create partner and referral link in a single DynamoDB transaction.
-    await createPartnerWithReferralLink(
+    const { referralLink } = await createPartnerWithReferralLink(
       {
         partner_id: referralId,
         partner_first_name: firstName,
@@ -55,7 +60,7 @@ export async function POST(request: NextRequest) {
         contact_email: email,
         contact_phone: phone,
         organization_name: organizationName,
-        contact_name: `${firstName} ${lastName}`,
+        contact_name: contactName,
         segment_code: segment,
         reporting_group: reportingGroup,
         status: status,
@@ -74,11 +79,51 @@ export async function POST(request: NextRequest) {
         : undefined,
     );
 
+    // Generate referral resources (QR code, rack card).
+    const referralUrl = referralLink.full_url;
+    const qrCodeUrl = `https://quickchart.io/qr?text=${encodeURIComponent(
+      referralUrl,
+    )}&size=400`;
+
+    const rackCardData = await createRackCardWithPlacid({
+      organizationName: organizationName || "",
+      referralUrl,
+      qrCodeUrl,
+      referralId,
+    });
+
+    const rackCardUrl = rackCardData.pdf_url;
+
+    if (!rackCardUrl) {
+      throw new Error("Rack card PDF URL was not returned by Placid.");
+    }
+
+    // Update partner and referral link tables with referral resources.
+    await updateReferralResourcesAtomic(
+      referralId,
+      status,
+      qrCodeUrl,
+      rackCardUrl,
+      new Date().toISOString(),
+    );
+
+    // Send notification email to referral applicant with their referral resources.
+    // await sendReferralNotificationEmail({
+    //   toEmail: email,
+    //   partnerName: contactName || organizationName,
+    //   referralId,
+    //   referralUrl,
+    //   qrCodeUrl,
+    //   rackCardUrl,
+    // });
+
     return NextResponse.json({
       success: true,
       message:
-        "Referral applicant (Partner, Referral Link, Partner Location) saved successfully",
+        "Referral applicant and referral PDF resources saved successfully",
       partner_id: referralId,
+      qr_code_url: qrCodeUrl,
+      rack_card_pdf_url: rackCardUrl,
     });
   } catch (error) {
     console.error("Referral webhook error:", error);

@@ -3,7 +3,7 @@ import { createRackCardWithPlacid } from "@/lib/createRackCard";
 import { updateReferralResourcesAtomic } from "@/lib/partners";
 type GenerateResourcePayload = {
   referral_id: string;
-  partner_name: string;
+  organization_name: string;
   old_status: string;
   status: string;
   updated_at: string;
@@ -12,7 +12,7 @@ type GenerateResourcePayload = {
 function validatePayload(data: GenerateResourcePayload) {
   const requiredFields = [
     "referral_id",
-    "partner_name",
+    "organization_name",
     "old_status",
     "status",
     "updated_at",
@@ -58,7 +58,7 @@ export async function PATCH(req: NextRequest) {
     }
 
     const referralId = body.referral_id!;
-    const partnerName = body.partner_name!;
+    const organizationName = body.organization_name!;
     const referralUrl = `${process.env.BASE_URL}${referralId}`;
 
     // Generate QR code using QuickChart API (for simplicity and speed)
@@ -68,15 +68,19 @@ export async function PATCH(req: NextRequest) {
 
     // Generate Placid rack card
     const rackCardData = await createRackCardWithPlacid({
-      partnerName,
+      organizationName,
       referralUrl,
       qrCodeUrl,
       referralId,
     });
 
     const status = body.status.trim().toLowerCase();
-    const rackCardUrl = rackCardData.image_url;
+    const rackCardUrl = rackCardData.pdf_url;
     const updatedAt = body.updated_at;
+
+    if (!rackCardUrl) {
+      throw new Error("Rack card PDF URL was not returned by Placid.");
+    }
 
     // Update referral_links + partners tables atomically using TransactWrite
     await updateReferralResourcesAtomic(
@@ -90,13 +94,13 @@ export async function PATCH(req: NextRequest) {
     // update google sheet with QR code link + rack card link
     return NextResponse.json({
       success: true,
-      message: "QR code generated successfully.",
+      message: "QR code and rack card PDF generated successfully.",
       data: {
         referral_id: referralId,
-        partner_name: partnerName,
+        organization_name: organizationName,
         referral_url: referralUrl,
         qr_code_url: qrCodeUrl,
-        rack_card_url: rackCardData.image_url,
+        rack_card_pdf_url: rackCardUrl,
       },
     });
   } catch (error) {
