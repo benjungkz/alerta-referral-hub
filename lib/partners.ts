@@ -9,9 +9,11 @@ import {
 } from "@aws-sdk/lib-dynamodb";
 import { ddbDocClient } from "./dynamodb";
 import { logger } from "./logger";
-import { Partner, ReferralLink } from "../types/db";
+import { Partner, PartnerLocation, ReferralLink } from "../types/db";
 const REFERRAL_LINKS_TABLE_NAME =
   process.env.DYNAMODB_REFERRAL_LINKS_TABLE || "referral_links";
+const PARTNER_LOCATIONS_TABLE_NAME =
+  process.env.DYNAMODB_PARTNER_LOCATIONS_TABLE || "partner_locations";
 
 const TABLE_NAME = process.env.DYNAMODB_PARTNERS_TABLE || "partners";
 
@@ -167,6 +169,7 @@ export async function createPartner(partnerData: Partial<Partner> = {}) {
 export async function createPartnerWithReferralLink(
   partnerData: Partial<Partner> = {},
   referralLinkData: Partial<ReferralLink> = {},
+  partnerLocationData: Partial<PartnerLocation> = {},
 ) {
   // Validation not null checks for required fields for both partner and referral link creation in a single transaction
   if (!partnerData.partner_id) {
@@ -257,11 +260,19 @@ export async function createPartnerWithReferralLink(
     created_at: now,
     updated_at: now,
   };
-  // test console logs to verify data before transaction
-  console.log("Prepared Partner Data for Transaction:", partner);
-  console.log("Prepared Referral Link Data for Transaction:", referralLink);
 
-  // DB transaction to create both partner and referral link atomically
+  const partnerLocation = partnerLocationData.location_name
+    ? ({
+        location_id: partnerLocationData.location_id || randomUUID(),
+        partner_id: partner.partner_id,
+        location_name: partnerLocationData.location_name,
+        status: partnerLocationData.status || "active",
+        created_at: now,
+        updated_at: now,
+      } satisfies PartnerLocation)
+    : undefined;
+
+  //DB transaction to create both partner and referral link atomically
   await ddbDocClient.send(
     new TransactWriteCommand({
       TransactItems: [
@@ -280,11 +291,22 @@ export async function createPartnerWithReferralLink(
             ConditionExpression: "attribute_not_exists(referral_link_id)",
           },
         },
+        ...(partnerLocation
+          ? [
+              {
+                Put: {
+                  TableName: PARTNER_LOCATIONS_TABLE_NAME,
+                  Item: partnerLocation,
+                  ConditionExpression: "attribute_not_exists(location_id)",
+                },
+              },
+            ]
+          : []),
       ],
     }),
   );
 
-  return { partner, referralLink };
+  return { partner, referralLink, partnerLocation };
 }
 
 export async function getPartner(partnerId = "JUNG-A9K3") {

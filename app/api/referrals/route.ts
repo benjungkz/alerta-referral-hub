@@ -24,6 +24,7 @@ export async function POST(request: NextRequest) {
     const status = body.status?.trim().toLowerCase() || "pending";
     const segment = body.segment?.trim();
     const reportingGroup = body.reporting_group?.trim();
+    const organizationName = body.organization_name?.trim();
     const notes = body.notes?.trim() || "";
     const consent = body.consent?.trim();
     const createdAt = body.created_at?.trim();
@@ -53,7 +54,7 @@ export async function POST(request: NextRequest) {
         partner_last_name: lastName,
         contact_email: email,
         contact_phone: phone,
-        organization_name: body.organization?.trim(),
+        organization_name: organizationName,
         contact_name: `${firstName} ${lastName}`,
         segment_code: segment,
         reporting_group: reportingGroup,
@@ -65,11 +66,18 @@ export async function POST(request: NextRequest) {
       {
         partner_id: referralId,
       },
+      organizationName
+        ? {
+            partner_id: referralId,
+            location_name: organizationName,
+          }
+        : undefined,
     );
 
     return NextResponse.json({
       success: true,
-      message: "Referral applicant (Partner, Referral Link) saved successfully",
+      message:
+        "Referral applicant (Partner, Referral Link, Partner Location) saved successfully",
       partner_id: referralId,
     });
   } catch (error) {
