@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { createRackCardWithPlacid } from "@/lib/createRackCard";
 import {
@@ -5,6 +6,35 @@ import {
   updateReferralResourcesAtomic,
 } from "../../../lib/partners";
 import { sendReferralNotificationEmail } from "@/lib/sendReferralNotificationEmail";
+
+const API_KEY_HEADER = "x-alerta-api-key";
+
+function getExpectedApiKey() {
+  const envName =
+    process.env.NODE_ENV === "production"
+      ? "ALERTA_API_KEY_PROD"
+      : "ALERTA_API_KEY_DEV";
+
+  return {
+    envName,
+    apiKey: process.env[envName]?.trim(),
+  };
+}
+
+function isValidApiKey(providedApiKey: string | null, expectedApiKey: string) {
+  if (!providedApiKey) {
+    return false;
+  }
+
+  const providedBuffer = Buffer.from(providedApiKey.trim());
+  const expectedBuffer = Buffer.from(expectedApiKey);
+
+  if (providedBuffer.length !== expectedBuffer.length) {
+    return false;
+  }
+
+  return timingSafeEqual(providedBuffer, expectedBuffer);
+}
 
 /**
  * POST /api/referrals
@@ -19,6 +49,22 @@ import { sendReferralNotificationEmail } from "@/lib/sendReferralNotificationEma
  */
 export async function POST(request: NextRequest) {
   try {
+    // Validate API key for authentication
+    const { apiKey: expectedApiKey, envName } = getExpectedApiKey();
+
+    if (!expectedApiKey) {
+      console.error(`Missing ${envName} environment variable.`);
+      return NextResponse.json(
+        { error: "API key is not configured" },
+        { status: 500 },
+      );
+    }
+
+    if (!isValidApiKey(request.headers.get(API_KEY_HEADER), expectedApiKey)) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    // Parse and normalize referral data from request body
     const body = await request.json();
 
     const firstName = body.first_name?.trim();
@@ -80,7 +126,7 @@ export async function POST(request: NextRequest) {
         : undefined,
     );
 
-    // Generate referral resources (QR code, rack card).
+    //Generate referral resources (QR code, rack card).
     const referralUrl = referralLink.full_url;
     const qrCodeUrl = `https://quickchart.io/qr?text=${encodeURIComponent(
       referralUrl,
