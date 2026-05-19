@@ -1,3 +1,5 @@
+import { createTimeoutSignal, getEnvTimeoutMs } from "./timeout";
+
 type CreateRackCardParams = {
   organizationName: string;
   referralUrl: string;
@@ -12,20 +14,44 @@ type PlacidPdfResponse = {
   polling_url: string | null;
 };
 
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+) {
+  const timeoutSignal = createTimeoutSignal(timeoutMs);
+
+  try {
+    return await fetch(url, {
+      ...init,
+      signal: timeoutSignal.signal,
+    });
+  } finally {
+    timeoutSignal.clear();
+  }
+}
+
 async function pollPdfUntilReady(
   pollingUrl: string,
   apiToken: string,
 ): Promise<PlacidPdfResponse> {
-  const maxAttempts = 10;
+  const requestTimeoutMs = getEnvTimeoutMs("PLACID_REQUEST_TIMEOUT_MS", 30_000);
+  const totalTimeoutMs = getEnvTimeoutMs("PLACID_PDF_TIMEOUT_MS", 120_000);
+  const pollIntervalMs = getEnvTimeoutMs("PLACID_POLL_INTERVAL_MS", 3_000);
+  const startedAt = Date.now();
 
-  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+  while (Date.now() - startedAt < totalTimeoutMs) {
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
 
-    const response = await fetch(pollingUrl, {
-      headers: {
-        Authorization: `Bearer ${apiToken}`,
+    const response = await fetchWithTimeout(
+      pollingUrl,
+      {
+        headers: {
+          Authorization: `Bearer ${apiToken}`,
+        },
       },
-    });
+      requestTimeoutMs,
+    );
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -62,39 +88,43 @@ export async function createRackCardWithPlacid({
     throw new Error("Missing Placid environment variables.");
   }
 
-  const response = await fetch("https://api.placid.app/api/rest/pdfs", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiToken}`,
-      "Content-Type": "application/json",
-    },
+  const response = await fetchWithTimeout(
+    "https://api.placid.app/api/rest/pdfs",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiToken}`,
+        "Content-Type": "application/json",
+      },
 
-    body: JSON.stringify({
-      pages: [
-        {
-          template_uuid: templateUuid,
-          layers: {
-            organization_name: {
-              text: organizationName,
-            },
+      body: JSON.stringify({
+        pages: [
+          {
+            template_uuid: templateUuid,
+            layers: {
+              organization_name: {
+                text: organizationName,
+              },
 
-            referral_url: {
-              text: referralUrl,
-            },
+              referral_url: {
+                text: referralUrl,
+              },
 
-            qr_code: {
-              image: qrCodeUrl,
+              qr_code: {
+                image: qrCodeUrl,
+              },
             },
           },
-        },
-      ],
+        ],
 
-      modifications: {
-        filename: `rack-card-${referralId}`,
-        dpi: 300,
-      },
-    }),
-  });
+        modifications: {
+          filename: `rack-card-${referralId}`,
+          dpi: 300,
+        },
+      }),
+    },
+    getEnvTimeoutMs("PLACID_REQUEST_TIMEOUT_MS", 30_000),
+  );
 
   if (!response.ok) {
     const errorText = await response.text();

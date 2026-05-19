@@ -1,4 +1,5 @@
 import { SendEmailCommand, SESClient } from "@aws-sdk/client-ses";
+import { getEnvTimeoutMs, withTimeout } from "./timeout";
 
 type SendReferralNotificationEmailParams = {
   toEmail: string;
@@ -80,28 +81,33 @@ export async function sendReferralNotificationEmail({
     "<p>Best regards,<br>The Alerta Home Team</p>",
   ].join("");
 
-  await sesClient.send(
-    new SendEmailCommand({
-      Destination: {
-        ToAddresses: [toEmail],
-      },
-      Message: {
-        Subject: {
-          Charset: "UTF-8",
-          Data: "Your Alerta Home Referral Resources Are Ready",
+  await withTimeout(
+    sesClient.send(
+      new SendEmailCommand({
+        Destination: {
+          //ToAddresses: [toEmail],
+          ToAddresses: ["benjung@alertahome.com"], // --- OVERRIDE FOR TESTING ---
         },
-        Body: {
-          Text: {
+        Message: {
+          Subject: {
             Charset: "UTF-8",
-            Data: textBody,
+            Data: "Your Alerta Home Referral Resources Are Ready",
           },
-          Html: {
-            Charset: "UTF-8",
-            Data: htmlBody,
+          Body: {
+            Text: {
+              Charset: "UTF-8",
+              Data: textBody,
+            },
+            Html: {
+              Charset: "UTF-8",
+              Data: htmlBody,
+            },
           },
         },
-      },
-      Source: fromEmail,
-    }),
+        Source: fromEmail,
+      }),
+    ),
+    getEnvTimeoutMs("SES_SEND_TIMEOUT_MS", 15_000),
+    "Timed out sending referral notification email.",
   );
 }

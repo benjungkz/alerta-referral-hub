@@ -5,13 +5,23 @@ import {
   UpdateCommand,
   DeleteCommand,
   ScanCommand,
+  QueryCommand,
   TransactWriteCommand,
 } from "@aws-sdk/lib-dynamodb";
 import { ddbDocClient } from "./dynamodb";
 import { logger } from "./logger";
-import { Partner, PartnerLocation, ReferralLink } from "../types/db";
+import { getReferralUrl } from "./urlConfig";
+import {
+  EmailStatus,
+  Partner,
+  PartnerLocation,
+  ReferralLink,
+  ResourceGenerationStatus,
+} from "../types/db";
 const REFERRAL_LINKS_TABLE_NAME =
   process.env.DYNAMODB_REFERRAL_LINKS_TABLE || "referral_links";
+const REFERRAL_LINKS_PARTNER_ID_INDEX =
+  process.env.DYNAMODB_REFERRAL_LINKS_PARTNER_ID_INDEX || "partner_id-GSI";
 const PARTNER_LOCATIONS_TABLE_NAME =
   process.env.DYNAMODB_PARTNER_LOCATIONS_TABLE || "partner_locations";
 
@@ -50,8 +60,6 @@ export async function isEmailExists(email: string): Promise<boolean> {
       Limit: 1,
     }),
   );
-
-  console.log(result);
 
   return (result.Items?.length ?? 0) > 0;
 }
@@ -151,6 +159,9 @@ export async function createPartner(partnerData: Partial<Partner> = {}) {
     status: partnerData.status || "pending",
     notes: partnerData.notes || "",
     consent: partnerData.consent!,
+    resource_generation_status:
+      partnerData.resource_generation_status || "pending",
+    email_status: partnerData.email_status || "pending",
     created_at: now,
     updated_at: now,
   };
@@ -230,6 +241,9 @@ export async function createPartnerWithReferralLink(
     status: partnerData.status || "pending",
     consent: partnerData.consent!,
     notes: partnerData.notes || "",
+    resource_generation_status:
+      partnerData.resource_generation_status || "pending",
+    email_status: partnerData.email_status || "pending",
     created_at: partnerData.created_at!,
     updated_at: now,
   };
@@ -243,7 +257,7 @@ export async function createPartnerWithReferralLink(
     base_path: referralLinkData.base_path || `/${partner.partner_id}`,
     full_url:
       referralLinkData.full_url ||
-      `${process.env.BASE_URL || "https://go.alertahome.com/"}${partner.partner_id}`,
+      getReferralUrl(partner.partner_id),
     segment_code: referralLinkData.segment_code || partner.segment_code,
     utm: referralLinkData.utm || {
       source: "referral",
@@ -361,6 +375,51 @@ export async function deletePartner(partnerId = "JUNG-A9K3") {
   return { partner_id: partnerId, deleted: true };
 }
 
+export async function updatePartnerProcessingStatus(
+  partnerId: string,
+  updates: {
+    resource_generation_status?: ResourceGenerationStatus;
+    email_status?: EmailStatus;
+  },
+  updatedAt: string = new Date().toISOString(),
+) {
+  const setExpressions = ["updated_at = :updated_at"];
+  const expressionAttributeValues: Record<string, unknown> = {
+    ":updated_at": updatedAt,
+  };
+
+  if (updates.resource_generation_status) {
+    setExpressions.push(
+      "resource_generation_status = :resource_generation_status",
+    );
+    expressionAttributeValues[":resource_generation_status"] =
+      updates.resource_generation_status;
+  }
+
+  if (updates.email_status) {
+    setExpressions.push("email_status = :email_status");
+    expressionAttributeValues[":email_status"] = updates.email_status;
+  }
+
+  if (setExpressions.length === 1) {
+    return undefined;
+  }
+
+  const result = await ddbDocClient.send(
+    new UpdateCommand({
+      TableName: TABLE_NAME,
+      Key: {
+        partner_id: partnerId,
+      },
+      UpdateExpression: `SET ${setExpressions.join(", ")}`,
+      ExpressionAttributeValues: expressionAttributeValues,
+      ReturnValues: "ALL_NEW",
+    }),
+  );
+
+  return result.Attributes;
+}
+
 export async function updateReferralResourcesAtomic(
   partnerId: string,
   status: string,
@@ -370,9 +429,10 @@ export async function updateReferralResourcesAtomic(
 ) {
   // 1. Find all referral links for this partner
   const referralLinksResult = await ddbDocClient.send(
-    new ScanCommand({
+    new QueryCommand({
       TableName: REFERRAL_LINKS_TABLE_NAME,
-      FilterExpression: "partner_id = :partner_id",
+      IndexName: REFERRAL_LINKS_PARTNER_ID_INDEX,
+      KeyConditionExpression: "partner_id = :partner_id",
       ExpressionAttributeValues: {
         ":partner_id": partnerId,
       },
@@ -395,12 +455,13 @@ export async function updateReferralResourcesAtomic(
         TableName: TABLE_NAME,
         Key: { partner_id: partnerId },
         UpdateExpression:
-          "SET #status = :status, qr_code_asset_url = :qr_code_asset_url, rack_card_url = :rack_card_url, updated_at = :updated_at",
+          "SET #status = :status, qr_code_asset_url = :qr_code_asset_url, rack_card_url = :rack_card_url, resource_generation_status = :resource_generation_status, updated_at = :updated_at",
         ExpressionAttributeNames: { "#status": "status" },
         ExpressionAttributeValues: {
           ":status": status,
           ":qr_code_asset_url": qrCodeAssetUrl,
           ":rack_card_url": rackCardUrl,
+          ":resource_generation_status": "completed",
           ":updated_at": updatedAt,
         },
       },

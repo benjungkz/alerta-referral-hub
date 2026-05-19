@@ -3,20 +3,23 @@ import { NextRequest, NextResponse } from "next/server";
 import { PutCommand, QueryCommand } from "@aws-sdk/lib-dynamodb";
 import { addTagsToOrder } from "@/lib/ShopifyOrder";
 import { ddbDocClient } from "@/lib/dynamodb";
+import {
+  checkRateLimit,
+  getRateLimitKey,
+  rateLimitedResponse,
+} from "@/lib/rateLimit";
 import type {
   ConversionStatus,
   ReferralConversion,
   ReferralLink,
 } from "@/types/db";
 
-const SHOPIFY_WEBHOOK_SECRET = process.env.SHOPIFY_WEBHOOK_SECRET!;
 const REFERRAL_CONVERSIONS_TABLE =
   process.env.DYNAMODB_REFERRAL_CONVERSIONS_TABLE || "referral_conversions";
 const REFERRAL_LINKS_TABLE =
   process.env.DYNAMODB_REFERRAL_LINKS_TABLE || "referral_links";
 const REFERRAL_LINKS_PARTNER_ID_INDEX =
   process.env.DYNAMODB_REFERRAL_LINKS_PARTNER_ID_INDEX || "partner_id-GSI";
-const CONVERSION_ID_BYTES = 12;
 
 type ShopifyNoteAttribute = {
   name: string;
@@ -57,18 +60,24 @@ type ShopifyOrder = {
 /**
  * Verify Shopify webhook signature
  */
-function verifyWebhook(rawBody: string, hmacHeader: string | null) {
+function verifyWebhook(
+  rawBody: string,
+  hmacHeader: string | null,
+  webhookSecret: string,
+) {
   if (!hmacHeader) return false;
 
-  const digest = crypto
-    .createHmac("sha256", SHOPIFY_WEBHOOK_SECRET)
+  const expectedDigest = crypto
+    .createHmac("sha256", webhookSecret)
     .update(rawBody, "utf8")
-    .digest("base64");
+    .digest();
+  const providedDigest = Buffer.from(hmacHeader, "base64");
 
-  return crypto.timingSafeEqual(
-    Buffer.from(digest, "base64"),
-    Buffer.from(hmacHeader, "base64"),
-  );
+  if (providedDigest.length !== expectedDigest.length) {
+    return false;
+  }
+
+  return crypto.timingSafeEqual(expectedDigest, providedDigest);
 }
 
 function getNoteAttribute(order: ShopifyOrder, name: string) {
@@ -129,8 +138,22 @@ function buildOrderTag(prefix: string, value: string) {
   return `${tagPrefix}${value.slice(0, availableValueLength)}`;
 }
 
-function createConversionId() {
-  return crypto.randomBytes(CONVERSION_ID_BYTES).toString("hex");
+function createConversionId(orderId: string | number) {
+  const normalizedOrderId = String(orderId)
+    .trim()
+    .replace(/[^A-Za-z0-9_-]/g, "-")
+    .slice(0, 80);
+
+  return `shopify-order-${normalizedOrderId}`;
+}
+
+function isConditionalCheckFailed(error: unknown) {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "name" in error &&
+    error.name === "ConditionalCheckFailedException"
+  );
 }
 
 async function getReferralLink(referralId: string) {
@@ -210,34 +233,69 @@ function buildConversionItem({
 }
 
 export async function POST(request: NextRequest) {
+  const rateLimit = checkRateLimit({
+    key: getRateLimitKey(request, "shopify-order-created"),
+    limit: 120,
+    windowMs: 60_000,
+  });
+
+  if (!rateLimit.allowed) {
+    return rateLimitedResponse(rateLimit.retryAfterSeconds);
+  }
+
+  const webhookSecret = process.env.SHOPIFY_WEBHOOK_SECRET?.trim();
+
+  if (!webhookSecret) {
+    console.error("Missing SHOPIFY_WEBHOOK_SECRET environment variable.");
+
+    return NextResponse.json(
+      { error: "Shopify webhook secret is not configured" },
+      { status: 500 },
+    );
+  }
+
   const rawBody = await request.text();
 
   const hmacHeader = request.headers.get("x-shopify-hmac-sha256");
 
-  if (!verifyWebhook(rawBody, hmacHeader)) {
+  if (!verifyWebhook(rawBody, hmacHeader, webhookSecret)) {
     return NextResponse.json({ error: "Invalid webhook" }, { status: 401 });
   }
 
-  const order = JSON.parse(rawBody) as ShopifyOrder;
+  let order: ShopifyOrder;
+
+  try {
+    order = JSON.parse(rawBody) as ShopifyOrder;
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON payload" }, { status: 400 });
+  }
+
+  if (!order.id) {
+    return NextResponse.json({ error: "Missing order ID" }, { status: 400 });
+  }
 
   const orderGid = `gid://shopify/Order/${order.id}`;
 
-  console.log("Received order created webhook for order ID:", order.id);
+  console.info("Received Shopify order-created webhook:", {
+    orderId: order.id,
+  });
 
   const referralId = getNoteAttribute(order, "referrer_id")
     ?.trim()
     .toUpperCase();
 
   if (!referralId) {
-    console.log("No referral ID found in order note attributes");
+    console.info("No referral ID found in Shopify order note attributes:", {
+      orderId: order.id,
+    });
     return NextResponse.json({
       success: true,
       message: "No referral found",
     });
   }
 
-  // create a unique conversion ID for this order - this will be used to link the Shopify order with the referral conversion in our database and ensure idempotency in case of duplicate webhooks
-  const conversionId = createConversionId();
+  const conversionId = createConversionId(order.id);
+  let conversionAlreadySaved = false;
 
   // Save conversion data to DynamoDB for tracking and analytics purposes
   try {
@@ -255,22 +313,33 @@ export async function POST(request: NextRequest) {
       new PutCommand({
         TableName: REFERRAL_CONVERSIONS_TABLE,
         Item: conversionItem,
+        ConditionExpression: "attribute_not_exists(conversion_id)",
       }),
     );
   } catch (error) {
-    console.error("Failed to save referral conversion:", error);
-    return NextResponse.json(
-      { error: "Failed to save referral conversion" },
-      { status: 500 },
-    );
+    if (isConditionalCheckFailed(error)) {
+      conversionAlreadySaved = true;
+      console.info("Duplicate Shopify referral conversion ignored:", {
+        orderId: order.id,
+        conversionId,
+        referralId,
+      });
+    } else {
+      console.error("Failed to save referral conversion:", error);
+      return NextResponse.json(
+        { error: "Failed to save referral conversion" },
+        { status: 500 },
+      );
+    }
   }
 
-  console.log(
-    "Saved referral conversion for order ID:",
-    order.id,
-    "with conversion ID:",
-    conversionId,
-  );
+  if (!conversionAlreadySaved) {
+    console.info("Saved referral conversion:", {
+      orderId: order.id,
+      conversionId,
+      referralId,
+    });
+  }
   // Add tags to the Shopify order for easy identification and segmentation in Shopify admin and analytics - this will allow us to easily track which orders came from referrals and link them back to the conversion data in our database
   try {
     await addTagsToOrder(orderGid, [
@@ -279,16 +348,27 @@ export async function POST(request: NextRequest) {
       "referral-order",
     ]);
   } catch (error) {
-    console.error("Failed to add tags to order:", error);
-    return NextResponse.json(
-      { error: "Failed to process referral" },
-      { status: 500 },
-    );
+    console.error("Failed to add tags to Shopify order:", {
+      orderId: order.id,
+      conversionId,
+      referralId,
+      error,
+    });
+
+    return NextResponse.json({
+      success: true,
+      referralId,
+      conversionId,
+      duplicate: conversionAlreadySaved,
+      tag_status: "failed",
+    });
   }
 
   return NextResponse.json({
     success: true,
     referralId,
     conversionId,
+    duplicate: conversionAlreadySaved,
+    tag_status: "tagged",
   });
 }

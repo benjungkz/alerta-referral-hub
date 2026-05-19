@@ -1,5 +1,6 @@
 import { gql } from "graphql-request";
 import { shopifyClient } from "./ShopifyClient";
+import { getEnvTimeoutMs, withTimeout } from "./timeout";
 
 /**
  * Adds tags to a Shopify order
@@ -19,10 +20,14 @@ export async function addTagsToOrder(orderGid: string, tags: string[]) {
     }
   `;
 
-  const data = await shopifyClient.request(mutation, {
-    id: orderGid,
-    tags,
-  });
+  const data = await withTimeout(
+    shopifyClient.request(mutation, {
+      id: orderGid,
+      tags,
+    }),
+    getEnvTimeoutMs("SHOPIFY_TAG_TIMEOUT_MS", 15_000),
+    "Timed out adding Shopify tags to order.",
+  );
 
   if (data.tagsAdd.userErrors.length > 0) {
     console.error("Shopify tag error:", data.tagsAdd.userErrors);
