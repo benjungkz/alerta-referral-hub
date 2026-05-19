@@ -30,6 +30,10 @@ export type ConversionStatus =
 
 export type CreditStatus = "pending" | "approved" | "paid" | "reversed";
 
+export type ResourceGenerationStatus = "pending" | "completed" | "failed";
+
+export type EmailStatus = "pending" | "sent" | "failed";
+
 // ======================================================
 // Shared Objects
 // ======================================================
@@ -77,6 +81,9 @@ export interface Partner {
 
   qr_code_asset_url?: string;
   rack_card_url?: string;
+
+  resource_generation_status: ResourceGenerationStatus;
+  email_status: EmailStatus;
 
   created_at: string;
   updated_at: string;

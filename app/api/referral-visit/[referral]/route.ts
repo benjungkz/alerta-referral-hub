@@ -2,8 +2,13 @@ import { randomUUID } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { PutCommand, QueryCommand } from "@aws-sdk/lib-dynamodb";
 import { ddbDocClient } from "@/lib/dynamodb";
+import {
+  checkRateLimit,
+  getRateLimitKey,
+  rateLimitedResponse,
+} from "@/lib/rateLimit";
+import { getShopifyHomeUrl } from "@/lib/urlConfig";
 
-const DEST_URL = process.env.SHOPIFY_HOME_URL || "https://www.alertahome.com/";
 const TABLE_NAME =
   process.env.DYNAMODB_REFERRAL_SESSIONS_TABLE || "referral_sessions";
 const REFERRAL_LINKS_TABLE =
@@ -25,8 +30,6 @@ async function getReferralLinkData(partnerId: string) {
       Limit: 1,
     }),
   );
-
-  console.log("Referral link query result:", result);
 
   return result.Items?.[0] as
     | { referral_link_id?: string; utm?: Record<string, string> }
@@ -86,6 +89,16 @@ export async function POST(
   request: NextRequest,
   context: { params: Promise<{ referral: string }> },
 ) {
+  const rateLimit = checkRateLimit({
+    key: getRateLimitKey(request, "referral-visit"),
+    limit: 120,
+    windowMs: 60_000,
+  });
+
+  if (!rateLimit.allowed) {
+    return rateLimitedResponse(rateLimit.retryAfterSeconds);
+  }
+
   const { referral } = await context.params;
   const referralId = referral?.trim().toUpperCase();
 
@@ -105,7 +118,7 @@ export async function POST(
   const geo = getGeoDataFromHeaders(request);
   const now = new Date().toISOString();
   const sessionId = randomUUID();
-  const redirectUrl = new URL(DEST_URL);
+  const redirectUrl = getShopifyHomeUrl();
 
   const referralLinkData = await getReferralLinkData(referralId);
   const referralLinkId = referralLinkData?.referral_link_id || referralId;
@@ -131,7 +144,12 @@ export async function POST(
     utm: referralUtm,
   };
 
-  console.log("Saving referral session:", sessionItem);
+  console.info("Saving referral session:", {
+    referralId,
+    deviceType,
+    hasGeo: !!geo,
+    hasReferrer: !!referrer,
+  });
 
   try {
     await ddbDocClient.send(
