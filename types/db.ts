@@ -75,6 +75,9 @@ export interface Partner {
 
   notes?: string;
 
+  qr_code_asset_url?: string;
+  rack_card_url?: string;
+
   created_at: string;
   updated_at: string;
 }
@@ -123,6 +126,7 @@ export interface ReferralLink {
   full_url: string;
 
   qr_code_asset_url?: string;
+  rack_card_url?: string;
 
   segment_code: SegmentCode;
 
