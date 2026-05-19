@@ -1,4 +1,5 @@
 import { SendEmailCommand, SESClient } from "@aws-sdk/client-ses";
+import { getAwsClientConfig } from "./awsConfig";
 import { getEnvTimeoutMs, withTimeout } from "./timeout";
 
 type SendReferralNotificationEmailParams = {
@@ -11,8 +12,7 @@ type SendReferralNotificationEmailParams = {
   rackCardUrl: string;
 };
 
-const region = process.env.AWS_REGION || "us-east-2";
-const sesClient = new SESClient({ region });
+const sesClient = new SESClient(getAwsClientConfig());
 
 function escapeHtml(value: string) {
   return value
