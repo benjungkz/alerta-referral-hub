@@ -102,9 +102,10 @@ export async function POST(
   const { referral } = await context.params;
   const referralId = referral?.trim().toUpperCase();
 
+  // validate referral ID format - it should be in the format ABCDE-1234 (2-20 uppercase letters, a dash, and 4 alphanumeric characters)
   if (!referralId || !REFERRAL_REGEX.test(referralId)) {
     return NextResponse.json(
-      { success: false, error: "Invalid referral ID." },
+      { success: false, error: "Invalid referral ID format." },
       { status: 400 },
     );
   }
@@ -120,9 +121,20 @@ export async function POST(
   const sessionId = randomUUID();
   const redirectUrl = getShopifyHomeUrl();
 
+  // validate referral ID by checking if it exists in the referral_links table
   const referralLinkData = await getReferralLinkData(referralId);
-  const referralLinkId = referralLinkData?.referral_link_id || referralId;
-  const referralUtm = referralLinkData?.utm;
+
+  if (!referralLinkData) {
+    console.warn("Invalid referral ID attempted:", { referralId });
+
+    return NextResponse.json(
+      { success: false, error: "Invalid referral ID. ID is not found." },
+      { status: 404 },
+    );
+  }
+
+  const referralLinkId = referralLinkData.referral_link_id || referralId;
+  const referralUtm = referralLinkData.utm;
 
   // set param for tracking in Shopify analytics - this will be used to attribute the visit to the referral link
   redirectUrl.searchParams.set("ref", referralId);
