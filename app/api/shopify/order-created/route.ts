@@ -1,6 +1,6 @@
 import crypto from "crypto";
 import { NextRequest, NextResponse } from "next/server";
-import { PutCommand, QueryCommand } from "@aws-sdk/lib-dynamodb";
+import { PutCommand, QueryCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { addTagsToOrder } from "@/lib/ShopifyOrder";
 import { ddbDocClient } from "@/lib/dynamodb";
 import {
@@ -8,6 +8,11 @@ import {
   getRateLimitKey,
   rateLimitedResponse,
 } from "@/lib/rateLimit";
+import {
+  getClaimWindowEndsAt,
+  getConvertedSessionExpiresAt,
+  getRetainUntil,
+} from "@/lib/referralTtl";
 import type {
   ConversionStatus,
   ReferralConversion,
@@ -16,6 +21,8 @@ import type {
 
 const REFERRAL_CONVERSIONS_TABLE =
   process.env.DYNAMODB_REFERRAL_CONVERSIONS_TABLE || "referral_conversions";
+const REFERRAL_SESSIONS_TABLE =
+  process.env.DYNAMODB_REFERRAL_SESSIONS_TABLE || "referral_sessions";
 const REFERRAL_LINKS_TABLE =
   process.env.DYNAMODB_REFERRAL_LINKS_TABLE || "referral_links";
 const REFERRAL_LINKS_PARTNER_ID_INDEX =
@@ -147,6 +154,14 @@ function createConversionId(orderId: string | number) {
   return `shopify-order-${normalizedOrderId}`;
 }
 
+function getValidDate(value: string | undefined) {
+  if (!value) return new Date();
+
+  const date = new Date(value);
+
+  return Number.isFinite(date.getTime()) ? date : new Date();
+}
+
 function isConditionalCheckFailed(error: unknown) {
   return (
     typeof error === "object" &&
@@ -172,6 +187,36 @@ async function getReferralLink(referralId: string) {
   return result.Items?.[0] as ReferralLink | undefined;
 }
 
+async function markReferralSessionConverted({
+  sessionId,
+  conversionId,
+  convertedAt,
+  expiresAt,
+}: {
+  sessionId: string;
+  conversionId: string;
+  convertedAt: string;
+  expiresAt: number;
+}) {
+  if (sessionId === "unattributed") return;
+
+  await ddbDocClient.send(
+    new UpdateCommand({
+      TableName: REFERRAL_SESSIONS_TABLE,
+      Key: { session_id: sessionId },
+      UpdateExpression:
+        "SET conversion_status = :conversion_status, converted_at = :converted_at, conversion_id = :conversion_id, expires_at = :expires_at, last_seen_at = :converted_at",
+      ExpressionAttributeValues: {
+        ":conversion_status": "converted",
+        ":converted_at": convertedAt,
+        ":conversion_id": conversionId,
+        ":expires_at": expiresAt,
+      },
+      ConditionExpression: "attribute_exists(session_id)",
+    }),
+  );
+}
+
 function buildConversionItem({
   order,
   conversionId,
@@ -193,6 +238,8 @@ function buildConversionItem({
     (discount) => discount.code,
   )?.code;
   const sessionId = getNoteAttribute(order, "session_id") || "unattributed";
+  const conversionDate = getValidDate(order.processed_at || order.created_at);
+  const conversionTimestamp = conversionDate.toISOString();
 
   return {
     conversion_id: conversionId,
@@ -202,9 +249,6 @@ function buildConversionItem({
     external_order_id: String(order.id),
     conversion_type: "purchase",
     conversion_status: getConversionStatus(order),
-    external_customer_id: order.customer?.id
-      ? String(order.customer.id)
-      : undefined,
     gross_revenue: grossRevenue,
     net_revenue: netRevenue,
     commissionable_amount:
@@ -213,8 +257,10 @@ function buildConversionItem({
         : netRevenue,
     currency_code: order.currency || "USD",
     credit_status: "pending",
-    conversion_timestamp:
-      order.processed_at || order.created_at || new Date().toISOString(),
+    conversion_timestamp: conversionTimestamp,
+    retention_category: "credit_claim_record",
+    retain_until: getRetainUntil(conversionDate),
+    claim_window_ends_at: getClaimWindowEndsAt(conversionDate),
     metadata: {
       order_name: order.name,
       shopify_tags: order.tags
@@ -267,7 +313,10 @@ export async function POST(request: NextRequest) {
   try {
     order = JSON.parse(rawBody) as ShopifyOrder;
   } catch {
-    return NextResponse.json({ error: "Invalid JSON payload" }, { status: 400 });
+    return NextResponse.json(
+      { error: "Invalid JSON payload" },
+      { status: 400 },
+    );
   }
 
   if (!order.id) {
@@ -296,11 +345,12 @@ export async function POST(request: NextRequest) {
 
   const conversionId = createConversionId(order.id);
   let conversionAlreadySaved = false;
+  let conversionItem: ReferralConversion | undefined;
 
   // Save conversion data to DynamoDB for tracking and analytics purposes
   try {
     const referralLink = await getReferralLink(referralId);
-    const conversionItem = removeUndefinedValues(
+    conversionItem = removeUndefinedValues(
       buildConversionItem({
         order,
         conversionId,
@@ -339,6 +389,27 @@ export async function POST(request: NextRequest) {
       conversionId,
       referralId,
     });
+
+    if (conversionItem) {
+      try {
+        await markReferralSessionConverted({
+          sessionId: conversionItem.session_id,
+          conversionId,
+          convertedAt: conversionItem.conversion_timestamp,
+          expiresAt: getConvertedSessionExpiresAt(
+            new Date(conversionItem.conversion_timestamp),
+          ),
+        });
+      } catch (error) {
+        console.warn("Failed to mark referral session converted:", {
+          orderId: order.id,
+          conversionId,
+          referralId,
+          sessionId: conversionItem.session_id,
+          error,
+        });
+      }
+    }
   }
   // Add tags to the Shopify order for easy identification and segmentation in Shopify admin and analytics - this will allow us to easily track which orders came from referrals and link them back to the conversion data in our database
   try {

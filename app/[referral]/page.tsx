@@ -84,6 +84,11 @@ export default function ReferralPage({ params }: ReferralPageProps) {
         );
 
         if (!response.ok) {
+          if (response.status === 404) {
+            router.replace("/referral-invalid");
+            return;
+          }
+
           const body = await response.json().catch(() => null);
           throw new Error(
             body?.error ||

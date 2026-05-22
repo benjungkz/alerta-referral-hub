@@ -21,6 +21,8 @@ export type DeviceType = "mobile" | "desktop" | "tablet" | "unknown";
 
 export type ConversionType = "purchase" | "lead" | "signup" | "add_to_cart";
 
+export type ReferralSessionConversionStatus = "unconverted" | "converted";
+
 export type ConversionStatus =
   | "pending"
   | "approved"
@@ -29,6 +31,13 @@ export type ConversionStatus =
   | "refunded";
 
 export type CreditStatus = "pending" | "approved" | "paid" | "reversed";
+
+export type RetentionCategory =
+  | "credit_claim_record"
+  | "accounting_record"
+  | "fraud_review_record"
+  | "dispute_record"
+  | "aggregated_reporting_record";
 
 export type ResourceGenerationStatus = "pending" | "completed" | "failed";
 
@@ -168,7 +177,13 @@ export interface ReferralSession {
 
   last_seen_at: string;
 
-  user_agent?: string;
+  conversion_status: ReferralSessionConversionStatus;
+
+  converted_at?: string;
+
+  conversion_id?: string;
+
+  expires_at: number;
 
   device_type: DeviceType;
 
@@ -194,8 +209,6 @@ export interface ReferralConversion {
 
   conversion_status: ConversionStatus;
 
-  external_customer_id?: string;
-
   gross_revenue?: number;
 
   net_revenue?: number;
@@ -209,6 +222,14 @@ export interface ReferralConversion {
   credit_amount?: number;
 
   conversion_timestamp: string;
+
+  retention_category: RetentionCategory;
+
+  retain_until: string;
+
+  claim_window_ends_at: string;
+
+  retention_notes?: string;
 
   metadata?: {
     order_name?: string;
