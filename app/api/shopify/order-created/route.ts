@@ -313,7 +313,10 @@ export async function POST(request: NextRequest) {
   try {
     order = JSON.parse(rawBody) as ShopifyOrder;
   } catch {
-    return NextResponse.json({ error: "Invalid JSON payload" }, { status: 400 });
+    return NextResponse.json(
+      { error: "Invalid JSON payload" },
+      { status: 400 },
+    );
   }
 
   if (!order.id) {
