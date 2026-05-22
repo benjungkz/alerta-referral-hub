@@ -32,6 +32,13 @@ export type ConversionStatus =
 
 export type CreditStatus = "pending" | "approved" | "paid" | "reversed";
 
+export type RetentionCategory =
+  | "credit_claim_record"
+  | "accounting_record"
+  | "fraud_review_record"
+  | "dispute_record"
+  | "aggregated_reporting_record";
+
 export type ResourceGenerationStatus = "pending" | "completed" | "failed";
 
 export type EmailStatus = "pending" | "sent" | "failed";
@@ -202,8 +209,6 @@ export interface ReferralConversion {
 
   conversion_status: ConversionStatus;
 
-  external_customer_id?: string;
-
   gross_revenue?: number;
 
   net_revenue?: number;
@@ -218,7 +223,13 @@ export interface ReferralConversion {
 
   conversion_timestamp: string;
 
-  expires_at: number;
+  retention_category: RetentionCategory;
+
+  retain_until: string;
+
+  claim_window_ends_at: string;
+
+  retention_notes?: string;
 
   metadata?: {
     order_name?: string;

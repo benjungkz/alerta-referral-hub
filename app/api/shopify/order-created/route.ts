@@ -8,7 +8,11 @@ import {
   getRateLimitKey,
   rateLimitedResponse,
 } from "@/lib/rateLimit";
-import { getConvertedReferralExpiresAt } from "@/lib/referralTtl";
+import {
+  getClaimWindowEndsAt,
+  getConvertedSessionExpiresAt,
+  getRetainUntil,
+} from "@/lib/referralTtl";
 import type {
   ConversionStatus,
   ReferralConversion,
@@ -150,6 +154,14 @@ function createConversionId(orderId: string | number) {
   return `shopify-order-${normalizedOrderId}`;
 }
 
+function getValidDate(value: string | undefined) {
+  if (!value) return new Date();
+
+  const date = new Date(value);
+
+  return Number.isFinite(date.getTime()) ? date : new Date();
+}
+
 function isConditionalCheckFailed(error: unknown) {
   return (
     typeof error === "object" &&
@@ -210,13 +222,11 @@ function buildConversionItem({
   conversionId,
   referralId,
   referralLink,
-  expiresAt,
 }: {
   order: ShopifyOrder;
   conversionId: string;
   referralId: string;
   referralLink?: ReferralLink;
-  expiresAt: number;
 }): ReferralConversion {
   const grossRevenue =
     toNumber(order.current_total_price) ?? toNumber(order.total_price);
@@ -228,6 +238,8 @@ function buildConversionItem({
     (discount) => discount.code,
   )?.code;
   const sessionId = getNoteAttribute(order, "session_id") || "unattributed";
+  const conversionDate = getValidDate(order.processed_at || order.created_at);
+  const conversionTimestamp = conversionDate.toISOString();
 
   return {
     conversion_id: conversionId,
@@ -237,9 +249,6 @@ function buildConversionItem({
     external_order_id: String(order.id),
     conversion_type: "purchase",
     conversion_status: getConversionStatus(order),
-    external_customer_id: order.customer?.id
-      ? String(order.customer.id)
-      : undefined,
     gross_revenue: grossRevenue,
     net_revenue: netRevenue,
     commissionable_amount:
@@ -248,9 +257,10 @@ function buildConversionItem({
         : netRevenue,
     currency_code: order.currency || "USD",
     credit_status: "pending",
-    conversion_timestamp:
-      order.processed_at || order.created_at || new Date().toISOString(),
-    expires_at: expiresAt,
+    conversion_timestamp: conversionTimestamp,
+    retention_category: "credit_claim_record",
+    retain_until: getRetainUntil(conversionDate),
+    claim_window_ends_at: getClaimWindowEndsAt(conversionDate),
     metadata: {
       order_name: order.name,
       shopify_tags: order.tags
@@ -337,14 +347,12 @@ export async function POST(request: NextRequest) {
   // Save conversion data to DynamoDB for tracking and analytics purposes
   try {
     const referralLink = await getReferralLink(referralId);
-    const conversionExpiresAt = getConvertedReferralExpiresAt();
     conversionItem = removeUndefinedValues(
       buildConversionItem({
         order,
         conversionId,
         referralId,
         referralLink,
-        expiresAt: conversionExpiresAt,
       }),
     );
 
@@ -385,7 +393,9 @@ export async function POST(request: NextRequest) {
           sessionId: conversionItem.session_id,
           conversionId,
           convertedAt: conversionItem.conversion_timestamp,
-          expiresAt: conversionItem.expires_at,
+          expiresAt: getConvertedSessionExpiresAt(
+            new Date(conversionItem.conversion_timestamp),
+          ),
         });
       } catch (error) {
         console.warn("Failed to mark referral session converted:", {
