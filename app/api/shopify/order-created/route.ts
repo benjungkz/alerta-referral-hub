@@ -1,6 +1,6 @@
 import crypto from "crypto";
 import { NextRequest, NextResponse } from "next/server";
-import { PutCommand, QueryCommand } from "@aws-sdk/lib-dynamodb";
+import { PutCommand, QueryCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { addTagsToOrder } from "@/lib/ShopifyOrder";
 import { ddbDocClient } from "@/lib/dynamodb";
 import {
@@ -8,6 +8,7 @@ import {
   getRateLimitKey,
   rateLimitedResponse,
 } from "@/lib/rateLimit";
+import { getConvertedReferralExpiresAt } from "@/lib/referralTtl";
 import type {
   ConversionStatus,
   ReferralConversion,
@@ -16,6 +17,8 @@ import type {
 
 const REFERRAL_CONVERSIONS_TABLE =
   process.env.DYNAMODB_REFERRAL_CONVERSIONS_TABLE || "referral_conversions";
+const REFERRAL_SESSIONS_TABLE =
+  process.env.DYNAMODB_REFERRAL_SESSIONS_TABLE || "referral_sessions";
 const REFERRAL_LINKS_TABLE =
   process.env.DYNAMODB_REFERRAL_LINKS_TABLE || "referral_links";
 const REFERRAL_LINKS_PARTNER_ID_INDEX =
@@ -172,16 +175,48 @@ async function getReferralLink(referralId: string) {
   return result.Items?.[0] as ReferralLink | undefined;
 }
 
+async function markReferralSessionConverted({
+  sessionId,
+  conversionId,
+  convertedAt,
+  expiresAt,
+}: {
+  sessionId: string;
+  conversionId: string;
+  convertedAt: string;
+  expiresAt: number;
+}) {
+  if (sessionId === "unattributed") return;
+
+  await ddbDocClient.send(
+    new UpdateCommand({
+      TableName: REFERRAL_SESSIONS_TABLE,
+      Key: { session_id: sessionId },
+      UpdateExpression:
+        "SET conversion_status = :conversion_status, converted_at = :converted_at, conversion_id = :conversion_id, expires_at = :expires_at, last_seen_at = :converted_at",
+      ExpressionAttributeValues: {
+        ":conversion_status": "converted",
+        ":converted_at": convertedAt,
+        ":conversion_id": conversionId,
+        ":expires_at": expiresAt,
+      },
+      ConditionExpression: "attribute_exists(session_id)",
+    }),
+  );
+}
+
 function buildConversionItem({
   order,
   conversionId,
   referralId,
   referralLink,
+  expiresAt,
 }: {
   order: ShopifyOrder;
   conversionId: string;
   referralId: string;
   referralLink?: ReferralLink;
+  expiresAt: number;
 }): ReferralConversion {
   const grossRevenue =
     toNumber(order.current_total_price) ?? toNumber(order.total_price);
@@ -215,6 +250,7 @@ function buildConversionItem({
     credit_status: "pending",
     conversion_timestamp:
       order.processed_at || order.created_at || new Date().toISOString(),
+    expires_at: expiresAt,
     metadata: {
       order_name: order.name,
       shopify_tags: order.tags
@@ -296,16 +332,19 @@ export async function POST(request: NextRequest) {
 
   const conversionId = createConversionId(order.id);
   let conversionAlreadySaved = false;
+  let conversionItem: ReferralConversion | undefined;
 
   // Save conversion data to DynamoDB for tracking and analytics purposes
   try {
     const referralLink = await getReferralLink(referralId);
-    const conversionItem = removeUndefinedValues(
+    const conversionExpiresAt = getConvertedReferralExpiresAt();
+    conversionItem = removeUndefinedValues(
       buildConversionItem({
         order,
         conversionId,
         referralId,
         referralLink,
+        expiresAt: conversionExpiresAt,
       }),
     );
 
@@ -339,6 +378,25 @@ export async function POST(request: NextRequest) {
       conversionId,
       referralId,
     });
+
+    if (conversionItem) {
+      try {
+        await markReferralSessionConverted({
+          sessionId: conversionItem.session_id,
+          conversionId,
+          convertedAt: conversionItem.conversion_timestamp,
+          expiresAt: conversionItem.expires_at,
+        });
+      } catch (error) {
+        console.warn("Failed to mark referral session converted:", {
+          orderId: order.id,
+          conversionId,
+          referralId,
+          sessionId: conversionItem.session_id,
+          error,
+        });
+      }
+    }
   }
   // Add tags to the Shopify order for easy identification and segmentation in Shopify admin and analytics - this will allow us to easily track which orders came from referrals and link them back to the conversion data in our database
   try {

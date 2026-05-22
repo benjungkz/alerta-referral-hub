@@ -7,6 +7,7 @@ import {
   getRateLimitKey,
   rateLimitedResponse,
 } from "@/lib/rateLimit";
+import { getUnconvertedSessionExpiresAt } from "@/lib/referralTtl";
 import { getShopifyHomeUrl } from "@/lib/urlConfig";
 
 const TABLE_NAME =
@@ -69,19 +70,34 @@ function getDeviceType(userAgent: string) {
 }
 
 function getGeoDataFromHeaders(request: NextRequest) {
+  const getDecodedHeader = (name: string) => {
+    const value = request.headers.get(name);
+
+    if (!value) return "";
+
+    try {
+      return decodeURIComponent(value);
+    } catch {
+      return value;
+    }
+  };
+
   const countryCode =
     request.headers.get("cf-ipcountry") ||
+    request.headers.get("cloudfront-viewer-country") ||
     request.headers.get("x-vercel-ip-country") ||
     "";
-  const region = request.headers.get("x-vercel-ip-country-region") || "";
-  const city = request.headers.get("x-vercel-ip-city") || "";
+  const region =
+    request.headers.get("cloudfront-viewer-country-region") ||
+    getDecodedHeader("cloudfront-viewer-country-region-name") ||
+    request.headers.get("x-vercel-ip-country-region") ||
+    "";
 
-  if (!countryCode && !region && !city) return undefined;
+  if (!countryCode && !region) return undefined;
 
   return {
     country_code: countryCode,
     region,
-    city: city ? decodeURIComponent(city) : "",
   };
 }
 
@@ -117,7 +133,8 @@ export async function POST(
   const userAgent = request.headers.get("user-agent") || "";
   const deviceType = getDeviceType(userAgent);
   const geo = getGeoDataFromHeaders(request);
-  const now = new Date().toISOString();
+  const nowDate = new Date();
+  const now = nowDate.toISOString();
   const sessionId = randomUUID();
   const redirectUrl = getShopifyHomeUrl();
 
@@ -150,8 +167,9 @@ export async function POST(
     referrer_url: referrer,
     first_seen_at: now,
     last_seen_at: now,
-    user_agent: userAgent,
     device_type: deviceType,
+    conversion_status: "unconverted",
+    expires_at: getUnconvertedSessionExpiresAt(nowDate),
     geo,
     utm: referralUtm,
   };
