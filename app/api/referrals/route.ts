@@ -259,6 +259,13 @@ export async function POST(request: NextRequest) {
     }
 
     if (!isValidApiKey(providedApiKey, expectedApiKey)) {
+      console.warn("Referral API key validation failed:", {
+        awsBranch: process.env.AWS_BRANCH || "",
+        selectedEnvName: envName,
+        hasExpectedApiKey: !!expectedApiKey,
+        hasProvidedApiKey: !!providedApiKey,
+      });
+
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 

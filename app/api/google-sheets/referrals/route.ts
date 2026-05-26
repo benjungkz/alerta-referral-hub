@@ -279,6 +279,13 @@ export async function PATCH(request: NextRequest) {
     }
 
     if (!isValidApiKey(providedApiKey, expectedApiKey)) {
+      console.warn("Google Sheets referral API key validation failed:", {
+        awsBranch: process.env.AWS_BRANCH || "",
+        selectedEnvName: envName,
+        hasExpectedApiKey: !!expectedApiKey,
+        hasProvidedApiKey: !!providedApiKey,
+      });
+
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
