@@ -34,7 +34,7 @@ const ALLOWED_REPORTING_GROUPS = [
 
 function getExpectedApiKey() {
   const envName =
-    process.env.AWS_BRANCH === "main"
+    process.env.ALERTA_ENV === "prod"
       ? "ALERTA_API_KEY_PROD"
       : "ALERTA_API_KEY_DEV";
 
@@ -280,7 +280,7 @@ export async function PATCH(request: NextRequest) {
 
     if (!isValidApiKey(providedApiKey, expectedApiKey)) {
       console.warn("Google Sheets referral API key validation failed:", {
-        awsBranch: process.env.AWS_BRANCH || "",
+        alertaEnv: process.env.ALERTA_ENV || "",
         selectedEnvName: envName,
         hasExpectedApiKey: !!expectedApiKey,
         hasProvidedApiKey: !!providedApiKey,
