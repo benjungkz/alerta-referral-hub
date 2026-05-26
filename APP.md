@@ -1,5 +1,3 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
-
 # Alerta Referral Hub
 
 Alerta Referral Hub is a Next.js application that manages the referral program workflow for Alerta Home. It receives referral submissions from Google Forms/Google Sheets, stores referral data in DynamoDB, generates referral links and rack cards, tracks referral visits, records Shopify conversions, and sends referral notification emails.

@@ -8,12 +8,7 @@ export type SegmentCode = "share-awareness" | "conversion-only";
 
 export type ReportingGroup = "marketing" | "operation";
 
-export type PartnerStatus =
-  | "pending"
-  | "active"
-  | "inactive"
-  | "suspended"
-  | "terminated";
+export type PartnerStatus = "active" | "inactive";
 
 export type LocationStatus = "active" | "inactive" | "paused" | "closed";
 

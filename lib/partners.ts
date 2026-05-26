@@ -3,7 +3,6 @@ import {
   PutCommand,
   GetCommand,
   UpdateCommand,
-  DeleteCommand,
   ScanCommand,
   QueryCommand,
   TransactWriteCommand,
@@ -15,8 +14,11 @@ import {
   EmailStatus,
   Partner,
   PartnerLocation,
+  PartnerStatus,
   ReferralLink,
+  ReportingGroup,
   ResourceGenerationStatus,
+  SegmentCode,
 } from "../types/db";
 const REFERRAL_LINKS_TABLE_NAME =
   process.env.DYNAMODB_REFERRAL_LINKS_TABLE || "referral_links";
@@ -24,6 +26,8 @@ const REFERRAL_LINKS_PARTNER_ID_INDEX =
   process.env.DYNAMODB_REFERRAL_LINKS_PARTNER_ID_INDEX || "partner_id-GSI";
 const PARTNER_LOCATIONS_TABLE_NAME =
   process.env.DYNAMODB_PARTNER_LOCATIONS_TABLE || "partner_locations";
+const PARTNER_LOCATIONS_PARTNER_ID_INDEX =
+  process.env.DYNAMODB_PARTNER_LOCATIONS_PARTNER_ID_INDEX || "partner_id-GSI";
 
 const TABLE_NAME = process.env.DYNAMODB_PARTNERS_TABLE || "partners";
 
@@ -156,7 +160,7 @@ export async function createPartner(partnerData: Partial<Partner> = {}) {
     contact_phone: partnerData.contact_phone!,
     segment_code: partnerData.segment_code || "share-awareness",
     reporting_group: partnerData.reporting_group || "marketing",
-    status: partnerData.status || "pending",
+    status: partnerData.status || "active",
     notes: partnerData.notes || "",
     consent: partnerData.consent!,
     resource_generation_status:
@@ -238,7 +242,7 @@ export async function createPartnerWithReferralLink(
     contact_phone: partnerData.contact_phone!,
     segment_code: partnerData.segment_code || "share-awareness",
     reporting_group: partnerData.reporting_group || "marketing",
-    status: partnerData.status || "pending",
+    status: partnerData.status || "active",
     consent: partnerData.consent!,
     notes: partnerData.notes || "",
     resource_generation_status:
@@ -255,9 +259,7 @@ export async function createPartnerWithReferralLink(
       referralLinkData.link_name ||
       `${partner.partner_first_name} ${partner.partner_last_name}`,
     base_path: referralLinkData.base_path || `/${partner.partner_id}`,
-    full_url:
-      referralLinkData.full_url ||
-      getReferralUrl(partner.partner_id),
+    full_url: referralLinkData.full_url || getReferralUrl(partner.partner_id),
     segment_code: referralLinkData.segment_code || partner.segment_code,
     utm: referralLinkData.utm || {
       source: "referral",
@@ -323,22 +325,247 @@ export async function createPartnerWithReferralLink(
   return { partner, referralLink, partnerLocation };
 }
 
-export async function getPartner(partnerId = "JUNG-A9K3") {
+export async function updatePartnerFromGoogleSheet(
+  partnerId: string,
+  updates: {
+    partner_first_name?: string;
+    partner_last_name?: string;
+    organization_name?: string;
+    contact_name?: string;
+    contact_email?: string;
+    contact_phone?: string;
+    segment_code?: SegmentCode;
+    reporting_group?: ReportingGroup;
+    status?: PartnerStatus;
+    consent?: "Yes" | "No";
+    notes?: string;
+  },
+  updatedAt: string = new Date().toISOString(),
+) {
+  const normalizedUpdates = { ...updates };
+
+  if (
+    (normalizedUpdates.partner_first_name !== undefined ||
+      normalizedUpdates.partner_last_name !== undefined) &&
+    normalizedUpdates.contact_name === undefined
+  ) {
+    const existingPartner = await ddbDocClient.send(
+      new GetCommand({
+        TableName: TABLE_NAME,
+        Key: {
+          partner_id: partnerId,
+        },
+        ProjectionExpression: "partner_first_name, partner_last_name",
+      }),
+    );
+
+    if (!existingPartner.Item) {
+      throw Object.assign(new Error("Referral ID was not found"), {
+        name: "ConditionalCheckFailedException",
+      });
+    }
+
+    const firstName =
+      normalizedUpdates.partner_first_name ||
+      (existingPartner.Item.partner_first_name as string | undefined) ||
+      "";
+    const lastName =
+      normalizedUpdates.partner_last_name ||
+      (existingPartner.Item.partner_last_name as string | undefined) ||
+      "";
+
+    normalizedUpdates.contact_name = `${firstName} ${lastName}`.trim();
+  }
+
+  const setExpressions = ["#updated_at = :updated_at"];
+  const expressionAttributeNames: Record<string, string> = {
+    "#updated_at": "updated_at",
+  };
+  const expressionAttributeValues: Record<string, unknown> = {
+    ":updated_at": updatedAt,
+  };
+
+  Object.entries(normalizedUpdates).forEach(([field, value]) => {
+    if (value === undefined) {
+      return;
+    }
+
+    const nameKey = `#${field}`;
+    const valueKey = `:${field}`;
+
+    setExpressions.push(`${nameKey} = ${valueKey}`);
+    expressionAttributeNames[nameKey] = field;
+    expressionAttributeValues[valueKey] = value;
+  });
+
+  if (setExpressions.length === 1) {
+    return undefined;
+  }
+
+  const relatedTransactItems = [];
+
+  if (
+    normalizedUpdates.contact_name !== undefined ||
+    normalizedUpdates.segment_code !== undefined
+  ) {
+    const referralLinksResult = await ddbDocClient.send(
+      new QueryCommand({
+        TableName: REFERRAL_LINKS_TABLE_NAME,
+        IndexName: REFERRAL_LINKS_PARTNER_ID_INDEX,
+        KeyConditionExpression: "partner_id = :partner_id",
+        ExpressionAttributeValues: {
+          ":partner_id": partnerId,
+        },
+        ProjectionExpression: "referral_link_id",
+      }),
+    );
+
+    const referralLinkIds = (referralLinksResult.Items || []).map(
+      (item) => item.referral_link_id as string,
+    );
+
+    relatedTransactItems.push(
+      ...referralLinkIds.map((referralLinkId) => ({
+        Update: {
+          TableName: REFERRAL_LINKS_TABLE_NAME,
+          Key: {
+            referral_link_id: referralLinkId,
+          },
+          UpdateExpression: `SET ${[
+            normalizedUpdates.contact_name !== undefined
+              ? "link_name = :link_name"
+              : undefined,
+            normalizedUpdates.segment_code !== undefined
+              ? "segment_code = :segment_code, utm.campaign = :utm_campaign"
+              : undefined,
+            "updated_at = :updated_at",
+          ]
+            .filter(Boolean)
+            .join(", ")}`,
+          ExpressionAttributeValues: {
+            ...(normalizedUpdates.contact_name !== undefined
+              ? { ":link_name": normalizedUpdates.contact_name }
+              : {}),
+            ...(normalizedUpdates.segment_code !== undefined
+              ? {
+                  ":segment_code": normalizedUpdates.segment_code,
+                  ":utm_campaign": normalizedUpdates.segment_code,
+                }
+              : {}),
+            ":updated_at": updatedAt,
+          },
+        },
+      })),
+    );
+  }
+
+  if (normalizedUpdates.organization_name !== undefined) {
+    const partnerLocationsResult = await ddbDocClient.send(
+      new QueryCommand({
+        TableName: PARTNER_LOCATIONS_TABLE_NAME,
+        IndexName: PARTNER_LOCATIONS_PARTNER_ID_INDEX,
+        KeyConditionExpression: "partner_id = :partner_id",
+        ExpressionAttributeValues: {
+          ":partner_id": partnerId,
+        },
+        ProjectionExpression: "location_id",
+      }),
+    );
+
+    const locationIds = (partnerLocationsResult.Items || []).map(
+      (item) => item.location_id as string,
+    );
+
+    relatedTransactItems.push(
+      ...locationIds.map((locationId) => ({
+        Update: {
+          TableName: PARTNER_LOCATIONS_TABLE_NAME,
+          Key: {
+            location_id: locationId,
+          },
+          UpdateExpression:
+            "SET location_name = :location_name, updated_at = :updated_at",
+          ExpressionAttributeValues: {
+            ":location_name": normalizedUpdates.organization_name,
+            ":updated_at": updatedAt,
+          },
+        },
+      })),
+    );
+  }
+
+  if (relatedTransactItems.length > 0) {
+    await ddbDocClient.send(
+      new TransactWriteCommand({
+        TransactItems: [
+          {
+            Update: {
+              TableName: TABLE_NAME,
+              Key: {
+                partner_id: partnerId,
+              },
+              UpdateExpression: `SET ${setExpressions.join(", ")}`,
+              ExpressionAttributeNames: expressionAttributeNames,
+              ExpressionAttributeValues: expressionAttributeValues,
+              ConditionExpression: "attribute_exists(partner_id)",
+            },
+          },
+          ...relatedTransactItems,
+        ],
+      }),
+    );
+
+    const updatedPartner = await ddbDocClient.send(
+      new GetCommand({
+        TableName: TABLE_NAME,
+        Key: {
+          partner_id: partnerId,
+        },
+      }),
+    );
+
+    return updatedPartner.Item;
+  }
+
   const result = await ddbDocClient.send(
-    new GetCommand({
+    new UpdateCommand({
       TableName: TABLE_NAME,
       Key: {
         partner_id: partnerId,
       },
+      UpdateExpression: `SET ${setExpressions.join(", ")}`,
+      ExpressionAttributeNames: expressionAttributeNames,
+      ExpressionAttributeValues: expressionAttributeValues,
+      ConditionExpression: "attribute_exists(partner_id)",
+      ReturnValues: "ALL_NEW",
     }),
   );
 
-  return result.Item;
+  return result.Attributes;
 }
 
-export async function updatePartnerStatus(
-  partnerId = "JUNG-A9K3",
-  status: string = "active",
+export async function getReferralLinkForPartner(partnerId: string) {
+  const result = await ddbDocClient.send(
+    new QueryCommand({
+      TableName: REFERRAL_LINKS_TABLE_NAME,
+      IndexName: REFERRAL_LINKS_PARTNER_ID_INDEX,
+      KeyConditionExpression: "partner_id = :partner_id",
+      ExpressionAttributeValues: {
+        ":partner_id": partnerId,
+      },
+      ProjectionExpression: "referral_link_id, full_url, qr_code_asset_url",
+      Limit: 1,
+    }),
+  );
+
+  return result.Items?.[0] as
+    | Pick<ReferralLink, "referral_link_id" | "full_url" | "qr_code_asset_url">
+    | undefined;
+}
+
+export async function updatePartnerRackCardUrl(
+  partnerId: string,
+  rackCardUrl: string,
   updatedAt: string = new Date().toISOString(),
 ) {
   const result = await ddbDocClient.send(
@@ -347,32 +574,19 @@ export async function updatePartnerStatus(
       Key: {
         partner_id: partnerId,
       },
-      UpdateExpression: "SET #status = :status, updated_at = :updated_at",
-      ExpressionAttributeNames: {
-        "#status": "status",
-      },
+      UpdateExpression:
+        "SET rack_card_url = :rack_card_url, resource_generation_status = :resource_generation_status, updated_at = :updated_at",
       ExpressionAttributeValues: {
-        ":status": status,
+        ":rack_card_url": rackCardUrl,
+        ":resource_generation_status": "completed",
         ":updated_at": updatedAt,
       },
+      ConditionExpression: "attribute_exists(partner_id)",
       ReturnValues: "ALL_NEW",
     }),
   );
 
   return result.Attributes;
-}
-
-export async function deletePartner(partnerId = "JUNG-A9K3") {
-  await ddbDocClient.send(
-    new DeleteCommand({
-      TableName: TABLE_NAME,
-      Key: {
-        partner_id: partnerId,
-      },
-    }),
-  );
-
-  return { partner_id: partnerId, deleted: true };
 }
 
 export async function updatePartnerProcessingStatus(

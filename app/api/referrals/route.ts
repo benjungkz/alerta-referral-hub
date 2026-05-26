@@ -19,11 +19,8 @@ const REFERRAL_ID_REGEX = /^[A-Z]{2,20}-[A-Z0-9]{4}$/;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PHONE_REGEX = /^[0-9+().\-\s]{7,30}$/;
 const ALLOWED_STATUSES = [
-  "pending",
   "active",
   "inactive",
-  "suspended",
-  "terminated",
 ] as const satisfies readonly PartnerStatus[];
 const ALLOWED_SEGMENTS = [
   "share-awareness",
@@ -36,7 +33,7 @@ const ALLOWED_REPORTING_GROUPS = [
 
 function getExpectedApiKey() {
   const envName =
-    process.env.NODE_ENV === "production"
+    process.env.AWS_BRANCH === "main"
       ? "ALERTA_API_KEY_PROD"
       : "ALERTA_API_KEY_DEV";
 
@@ -142,7 +139,7 @@ function getReferralPayload(body: unknown) {
   const referralId = getStringField(payload, "referral_id", 25)?.toUpperCase();
   const phone = getStringField(payload, "phone", 30);
   const rawStatus =
-    getOptionalStringField(payload, "status", 30)?.toLowerCase() || "pending";
+    getOptionalStringField(payload, "status", 30)?.toLowerCase() || "active";
   const segment =
     getOptionalStringField(payload, "segment", 50)?.toLowerCase() ||
     "share-awareness";
