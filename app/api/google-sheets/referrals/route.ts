@@ -34,7 +34,7 @@ const ALLOWED_REPORTING_GROUPS = [
 
 function getExpectedApiKey() {
   const envName =
-    process.env.NODE_ENV === "production"
+    process.env.AWS_BRANCH === "main"
       ? "ALERTA_API_KEY_PROD"
       : "ALERTA_API_KEY_DEV";
 
