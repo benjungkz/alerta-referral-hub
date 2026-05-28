@@ -2,6 +2,15 @@ import { gql } from "graphql-request";
 import { shopifyClient } from "./ShopifyClient";
 import { getEnvTimeoutMs, withTimeout } from "./timeout";
 
+type TagsAddResponse = {
+  tagsAdd: {
+    userErrors: Array<{
+      field?: string[];
+      message: string;
+    }>;
+  };
+};
+
 /**
  * Adds tags to a Shopify order
  */
@@ -21,7 +30,7 @@ export async function addTagsToOrder(orderGid: string, tags: string[]) {
   `;
 
   const data = await withTimeout(
-    shopifyClient.request(mutation, {
+    shopifyClient.request<TagsAddResponse>(mutation, {
       id: orderGid,
       tags,
     }),
